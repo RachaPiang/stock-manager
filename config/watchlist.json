@@ -1,0 +1,13 @@
+{
+  "stocks": [
+    {"symbol": "META", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "GOOGL", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "ETN", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "NVDA", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "MSFT", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "TXN", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "ASML", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "AMZN", "target_price": null, "shares": null, "average_cost": null, "target_weight": null},
+    {"symbol": "V", "target_price": null, "shares": null, "average_cost": null, "target_weight": null}
+  ]
+}

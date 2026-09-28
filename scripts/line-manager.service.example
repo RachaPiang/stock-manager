@@ -1,0 +1,17 @@
+[Unit]
+Description=Private owner-only LINE portfolio assistant
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=stockmanager
+WorkingDirectory=/opt/stock-manager
+ExecStart=/opt/stock-manager/.venv/bin/python -m app.line_webhook
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

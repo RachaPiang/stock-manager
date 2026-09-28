@@ -1,0 +1,14 @@
+[Unit]
+Description=Personal stock monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Replace this account and all /opt paths before installation.
+User=stockmanager
+WorkingDirectory=/opt/stock-manager
+ExecStart=/opt/stock-manager/.venv/bin/python -m app.main check --scheduled
+TimeoutStartSec=25min
+UMask=0077
+NoNewPrivileges=true
