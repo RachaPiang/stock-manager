@@ -210,3 +210,22 @@ def test_old_database_migrates_without_losing_unsent_queue_time(tmp_path):
     assert 'เข้าคิวเดิม: 28/09/2026 18:00 น.' in row['message']
     assert 'เริ่มแจ้งย้อนหลัง: 30/09/2026 19:00 น.' in row['message']
     assert 'กำหนดแจ้งเดิม:' not in row['message']  # Old queue time is not a known schedule.
+
+
+def test_live_delivery_stamps_clock_after_worker_delay(settings, tmp_path, monkeypatch):
+    store = ManagerStore(tmp_path/'manager.sqlite3')
+    planned = at('2026-09-30T18:00:00+07:00')
+    store.enqueue('slow-worker', 'report', planned.timestamp(), 8, scheduled_for=planned.timestamp())
+    moments = iter([at('2026-09-30T17:58:00+07:00'), at('2026-09-30T18:02:00+07:00')])
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(moments)
+    monkeypatch.setattr('app.line_webhook.datetime', Clock)
+    delivered = []
+    class Notifier:
+        def send(self, message, *args):
+            delivered.append(message)
+    process_one(settings, store, Notifier(), {})
+    assert 'กำหนดแจ้งเดิม: 30/09/2026 18:00 น.' in delivered[0]
+    assert 'เริ่มแจ้งย้อนหลัง: 30/09/2026 18:02 น.' in delivered[0]

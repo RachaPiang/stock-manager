@@ -143,6 +143,7 @@ def create_app(settings, store=None, reply_tokens=None):
 
 
 def process_one(settings, store, notifier, reply_tokens, now=None):
+    live_clock = now is None
     now = now or datetime.now(UTC)
     item = store.claim(now.timestamp())
     if item:
@@ -172,13 +173,16 @@ def process_one(settings, store, notifier, reply_tokens, now=None):
                 log.warning('LINE reply not confirmed; owner can resend command')
             else:
                 store.delivered(item['id'])
-    pending = store.pending(now.timestamp(), settings.manager_push_limit)
+    # A chat analysis may take minutes. Stamp scheduled delivery when it
+    # actually starts, rather than with the worker tick's earlier timestamp.
+    delivery_now = datetime.now(UTC) if live_clock else now
+    pending = store.pending(delivery_now.timestamp(), settings.manager_push_limit)
     if pending:
         store.start_delivery(pending['id'])
         try:
             notifier.send(pending['message'], pending['retry_key'], settings.line_user_id)
         except NotificationError as exc:
-            store.failed(pending['id'], now.timestamp(), exc.retryable)
+            store.failed(pending['id'], delivery_now.timestamp(), exc.retryable)
             log.warning('LINE delivery not confirmed; retryable=%s', exc.retryable)
         else:
             store.delivered(pending['id'])
@@ -212,7 +216,7 @@ def main():
                 while not stop.is_set():
                     try:
                         now = datetime.now(UTC)
-                        process_one(settings, store, notifier, tokens, now)
+                        process_one(settings, store, notifier, tokens)
                         if now.timestamp()-last_schedule >= 60:
                             last_schedule = now.timestamp()
                             schedule(settings, store, now)
