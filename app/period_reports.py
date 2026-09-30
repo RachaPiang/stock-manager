@@ -2,8 +2,18 @@
 from calendar import monthrange
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from app.market import NY, HOLIDAYS, is_open, session_close, completed_session
+
+BANGKOK = ZoneInfo('Asia/Bangkok')
+
+
+def delivery_time(close, hour=18):
+    """Send completed-session reports in the owner's evening, never before close."""
+    closed = close + timedelta(minutes=30)
+    local_day = closed.astimezone(BANGKOK).date()
+    return max(closed, datetime.combine(local_day, time(hour), BANGKOK))
 
 
 def session_on_or_before(day):
@@ -16,7 +26,7 @@ def session_on_or_before(day):
     return None
 
 
-def due_periods(now):
+def due_periods(now, delivery_hour=18, catchup_days=7):
     """Latest only; allow catch-up without replaying months of old messages."""
     last = completed_session(now)
     if last is None:
@@ -25,22 +35,29 @@ def due_periods(now):
     def add(kind, start, end, max_age):
         if not start or not end:
             return
-        ready = session_close(end) + timedelta(minutes=30)
+        closed = session_close(end) + timedelta(minutes=30)
+        ready = delivery_time(session_close(end), delivery_hour)
         if ready <= now < ready + max_age:
             result.append(dict(kind=kind, start=start.isoformat(), end=end.isoformat(),
-                               key=f'{kind}:{end}', ready=ready))
-    add('daily', session_on_or_before(last-timedelta(days=1)), last, timedelta(hours=48))
+                               key=f'{kind}:{end}', ready=ready, closed=closed))
+    # Before this evening, yesterday's unsent report may still be due.
+    daily_end = last
+    while daily_end and delivery_time(session_close(daily_end), delivery_hour) > now:
+        daily_end = session_on_or_before(daily_end-timedelta(days=1))
+    if daily_end:
+        add('daily', session_on_or_before(daily_end-timedelta(days=1)), daily_end,
+            timedelta(days=catchup_days))
     monday = last-timedelta(days=last.weekday())
     for week in (monday, monday-timedelta(days=7)):
         end = session_on_or_before(week+timedelta(days=4))
-        if end and session_close(end)+timedelta(minutes=30) <= now:
-            add('weekly', session_on_or_before(week-timedelta(days=1)), end, timedelta(days=7))
+        if end and delivery_time(session_close(end), delivery_hour) <= now:
+            add('weekly', session_on_or_before(week-timedelta(days=1)), end, timedelta(days=14))
             break
     first = last.replace(day=1)
     for month in (first, (first-timedelta(days=1)).replace(day=1)):
         end = session_on_or_before(month.replace(day=monthrange(month.year, month.month)[1]))
-        if end and session_close(end)+timedelta(minutes=30) <= now:
-            add('monthly', session_on_or_before(month-timedelta(days=1)), end, timedelta(days=7))
+        if end and delivery_time(session_close(end), delivery_hour) <= now:
+            add('monthly', session_on_or_before(month-timedelta(days=1)), end, timedelta(days=40))
             break
     return result
 

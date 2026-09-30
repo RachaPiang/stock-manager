@@ -14,18 +14,18 @@ def at(value):
 
 
 def test_close_deadline_dst_weekend_and_holidays():
-    before = due_periods(at('2026-09-25T20:29:00'))
+    before = due_periods(at('2026-09-26T10:59:00'))
     assert not any(p['end'] == '2026-09-25' for p in before)
-    after = due_periods(at('2026-09-25T20:30:00'))
+    after = due_periods(at('2026-09-26T11:00:00'))
     week = next(p for p in after if p['kind'] == 'weekly')
     assert (week['start'], week['end']) == ('2026-09-18', '2026-09-25')
-    early = due_periods(at('2026-11-27T18:30:00'))
+    early = due_periods(at('2026-11-28T11:00:00'))
     assert any(p['kind'] == 'weekly' and p['end'] == '2026-11-27' for p in early)
-    holiday = due_periods(at('2026-07-02T20:30:00'))
+    holiday = due_periods(at('2026-07-03T11:00:00'))
     assert any(p['kind'] == 'weekly' and p['end'] == '2026-07-02' for p in holiday)
-    winter = due_periods(at('2026-12-01T21:29:00'))
+    winter = due_periods(at('2026-12-02T10:59:00'))
     assert not any(p['end'] == '2026-12-01' for p in winter)
-    month = next(p for p in due_periods(at('2026-05-29T20:30:00')) if p['kind'] == 'monthly')
+    month = next(p for p in due_periods(at('2026-05-30T11:00:00')) if p['kind'] == 'monthly')
     assert (month['start'], month['end']) == ('2026-04-30', '2026-05-29')
     assert due_periods(at('2030-01-01T21:30:00')) == []
 
@@ -63,7 +63,7 @@ def test_close_reports_durable_and_no_extra_ai_on_retry(settings, tmp_path, monk
         calls.append(1)
         return dict(check_more='summary', risks='risk', options='options')
     monkeypatch.setattr('app.codex_client.analyze', analyze)
-    now = at('2026-09-25T20:30:00')
+    now = at('2026-09-26T11:00:00')
     run_due(settings, store, now)
     run_due(settings, ManagerStore(store.path), now+timedelta(minutes=1))
     assert len(calls) == 1  # weekly only; daily is calculated locally
@@ -80,7 +80,7 @@ def test_review_uses_saved_context_without_urls_or_extra_fetch(settings, monkeyp
         annual_fundamentals={}, investor_profile={'horizon': 'long-term'})
     monkeypatch.setattr('app.research_context.context', lambda *a: evidence)
     calls = []
-    def interpret(*args):
+    def interpret(*args, **kwargs):
         calls.append(args)
         return dict(check_more='ภาพรวม', risks='ความเสี่ยง', options='รอดูหลักฐาน')
     monkeypatch.setattr('app.scheduled_briefs.interpret', interpret)
@@ -99,7 +99,7 @@ def test_review_cache_failure_and_ai_limit_still_produce_report(settings, monkey
     def broken(*args):
         raise sqlite3.DatabaseError('unavailable')
     monkeypatch.setattr('app.research_context.context', broken)
-    monkeypatch.setattr('app.scheduled_briefs.interpret', lambda *a: None)
+    monkeypatch.setattr('app.scheduled_briefs.interpret', lambda *a, **kw: None)
     message, payload, used = portfolio_review(settings, report_fixture(), {'complete': True},
                                                'monthly:test', at('2026-09-25T20:30:00'))
     assert not used and payload['context_unavailable']
@@ -112,7 +112,7 @@ def test_missing_close_waits_then_publishes_gap_once(settings, tmp_path, monkeyp
     store.set('reports-enabled-at', '2026-09-24T00:00:00+00:00')
     monkeypatch.setattr('app.close_sync.sync_close', lambda *a: None)
     monkeypatch.setattr('app.report.report_data', lambda *a: {'portfolio': {'holdings': [{'symbol': 'META'}]}, 'stocks': []})
-    now = at('2026-09-24T20:30:00')
+    now = at('2026-09-25T11:00:00')
     run_due(settings, store, now)
     assert store.brief(kind='daily') is None
     run_due(settings, store, now+timedelta(hours=2))

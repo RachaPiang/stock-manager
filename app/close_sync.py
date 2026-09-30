@@ -1,10 +1,10 @@
-"""Recover completed-session prices after shutdown. No AI, alerts, or trades."""
+"""Recover completed prices and evaluate saved closing signals after shutdown."""
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, date
 
 from app.config import load_watchlist
 from app.database import Database, run_lock
-from app.fetcher import TwelveDataProvider, Snapshot, DataError
+from app.fetcher import TwelveDataProvider, Snapshot, DataError, DailyBar, StockProvider
 from app.market import completed_session, session_close, is_open
 
 
@@ -52,3 +52,40 @@ def sync_close(settings, now=None, provider=None):
         finally:
             db.close()
     return result
+
+
+class SavedCloseProvider(StockProvider):
+    """Evaluate the recovered official close without any additional API requests."""
+    def __init__(self, path, target):
+        self.path, self.target = path, target
+
+    def fetch(self, symbol, now):
+        import sqlite3
+        close = session_close(self.target)
+        db = sqlite3.connect(self.path.resolve().as_uri()+'?mode=ro', uri=True)
+        try:
+            quote = db.execute("SELECT price,previous_close FROM quotes WHERE symbol=? AND source='twelvedata' AND as_of=? AND price_kind='daily_close'",
+                               (symbol, close.isoformat())).fetchone()
+            rows = db.execute("SELECT day,close,open,high,low FROM prices WHERE symbol=? AND source='twelvedata' AND day<=? ORDER BY day",
+                              (symbol, self.target.isoformat())).fetchall()
+        finally:
+            db.close()
+        if not quote or not rows or rows[-1][0] != self.target.isoformat():
+            raise DataError('Saved official close is not complete')
+        bars = tuple(DailyBar(date.fromisoformat(row[0]), *row[1:]) for row in rows)
+        return Snapshot(symbol, quote[0], quote[1], close, bars, 'twelvedata', price_kind='daily_close')
+
+
+def check_close_signals(settings, now, *, analyst=None, notifier=None):
+    """Latest completed close only; use the normal event ledger, cooldown and AI cap."""
+    target = completed_session(now)
+    if settings.mock_mode or not settings.stock_api_key or target is None or is_open(now) or settings.notifier_mode != 'line':
+        return None
+    from app.analyst import CodexAnalyst, GeminiAnalyst, OpenAIAnalyst, TemplateAnalyst
+    from app.main import check
+    from app.notifier import LineNotifier
+    if analyst is None:
+        analyst = (TemplateAnalyst() if settings.analyst_mode == 'template' else
+                   {'codex': CodexAnalyst, 'gemini': GeminiAnalyst, 'openai': OpenAIAnalyst}[settings.analyst_mode](settings))
+    return check(settings, SavedCloseProvider(settings.database_path, target), analyst,
+                 notifier or LineNotifier(settings), now=now)

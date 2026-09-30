@@ -83,11 +83,16 @@ class Settings:
     news_sync_min_hours: float = 24.0
     openai_api_key: str = field(default="", repr=False)
     openai_model: str = ""
+    gemini_api_key: str = field(default="", repr=False)
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_share_portfolio_context: bool = False
     notifier_mode: str = "console"
     line_token: str = field(default="", repr=False)
     line_user_id: str = field(default="", repr=False)
     line_channel_secret: str = field(default='', repr=False)
     manager_push_limit: int = 8
+    manager_delivery_hour: int = 18
+    manager_catchup_days: int = 7
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -135,12 +140,16 @@ class Settings:
             configured_analyst_mode=env("ANALYST_MODE", "codex").lower(),
             codex_cli_path=env("CODEX_CLI_PATH"), codex_model=env("CODEX_MODEL"),
             openai_api_key=env("OPENAI_API_KEY"), openai_model=env("OPENAI_MODEL"),
+            gemini_api_key=env("GEMINI_API_KEY"), gemini_model=env("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            gemini_share_portfolio_context=env("GEMINI_SHARE_PORTFOLIO_CONTEXT", "false").lower() == "true",
             notifier_mode="console" if mock else env("NOTIFIER_MODE", "console").lower(),
             line_token=env("LINE_CHANNEL_ACCESS_TOKEN"), line_user_id=env("LINE_USER_ID"),
             line_channel_secret=env('LINE_CHANNEL_SECRET'),
             manager_push_limit=int(env('MANAGER_PUSH_LIMIT_PER_DAY', '8')),
+            manager_delivery_hour=int(env('MANAGER_DELIVERY_HOUR', '18')),
+            manager_catchup_days=int(env('MANAGER_CATCHUP_DAYS', '7')),
         )
-        if (settings.configured_analyst_mode not in {"template", "openai", "codex"}
+        if (settings.configured_analyst_mode not in {"template", "openai", "codex", "gemini"}
                 or settings.notifier_mode not in {"console", "line"}
                 or settings.news_mode not in {"off", "press_releases"}):
             raise ValueError("Invalid analyst, notifier or news mode")
@@ -150,6 +159,10 @@ class Settings:
             raise ValueError("AI call limits must be non-negative integers")
         if settings.manager_push_limit < 0:
             raise ValueError('MANAGER_PUSH_LIMIT_PER_DAY must be non-negative')
+        if not 0 <= settings.manager_delivery_hour <= 23:
+            raise ValueError('MANAGER_DELIVERY_HOUR must be between 0 and 23 (Bangkok time)')
+        if not 1 <= settings.manager_catchup_days <= 7:
+            raise ValueError('MANAGER_CATCHUP_DAYS must be between 1 and 7')
         if not 1 <= settings.news_lookback_days <= 90 or not 1 <= settings.news_per_symbol <= 10:
             raise ValueError("NEWS_LOOKBACK_DAYS must be 1-90 and NEWS_PER_SYMBOL must be 1-10")
         return settings
@@ -161,5 +174,7 @@ class Settings:
             raise ValueError("Live mode requires STOCK_PROVIDER=twelvedata and STOCK_API_KEY")
         if self.analyst_mode == "openai" and not (self.openai_api_key and self.openai_model):
             raise ValueError("OpenAI mode requires OPENAI_API_KEY and OPENAI_MODEL")
+        if self.analyst_mode == "gemini" and not self.gemini_api_key:
+            raise ValueError("Gemini mode requires GEMINI_API_KEY")
         if self.notifier_mode == "line" and not (self.line_token and self.line_user_id):
             raise ValueError("LINE mode requires LINE_CHANNEL_ACCESS_TOKEN and LINE_USER_ID")

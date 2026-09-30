@@ -89,6 +89,45 @@ class OpenAIAnalyst(Analyst):
         return evidence_text(payload) + "\n\nบทวิเคราะห์ AI (ควรตรวจทาน):\n" + output
 
 
+class GeminiAnalyst(Analyst):
+    """Optional Google Gemini provider. Private portfolio context is opt-in."""
+    uses_ai = True
+
+    def __init__(self, settings: Settings):
+        self.api_key = settings.gemini_api_key
+        self.timeout = settings.http_timeout
+        self.model = settings.gemini_model
+        self.share_portfolio_context = settings.gemini_share_portfolio_context
+
+    def summarize(self, payload: dict) -> str:
+        try:
+            from app.research_context import for_model
+            data = for_model(payload)
+            if not self.share_portfolio_context:
+                # Keep holdings, investment thesis, cost basis, DCA and personal
+                # profile local unless the owner explicitly opts in.
+                data.pop("decision_context", None)
+                data.pop("portfolio_context", None)
+                data.pop("investor_profile", None)
+            prompt = (INSTRUCTIONS + "\nสรุปเป็นภาษาไทย ใช้เฉพาะข้อมูลที่ให้มา ไม่สั่งซื้อขาย และแยกเหตุการณ์ หลักฐาน "
+                      "สิ่งที่ควรตรวจเพิ่ม ความเสี่ยง และทางเลือกแบบมีเงื่อนไข:\n"
+                      + json.dumps(data, ensure_ascii=False, allow_nan=False))
+            import requests
+            response = requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",
+                headers={"x-goog-api-key": self.api_key},
+                json={"model": self.model, "input": prompt, "store": False}, timeout=self.timeout)
+            response.raise_for_status()
+            result = response.json()
+            output = str(result.get("output_text") or "").strip()
+            if result.get("status") != "completed" or not output or len(output.encode("utf-16-le")) // 2 > 2400:
+                raise AnalysisError("AI output incomplete or too long")
+        except AnalysisError:
+            raise
+        except Exception:
+            raise AnalysisError("Google Gemini unavailable; use the labelled local template") from None
+        return evidence_text(payload) + "\n\nบทวิเคราะห์ AI (Google Gemini; ควรตรวจทาน):\n" + output
+
+
 class CodexAnalyst(Analyst):
     uses_ai = True
     def __init__(self, settings: Settings):

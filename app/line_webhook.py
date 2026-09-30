@@ -49,6 +49,10 @@ def schedule(settings, store, now):
     previous = local.date().replace(day=1)-timedelta(days=1)
     candidates = [(year, month, dca_day(year, month, plan['day']))
                   for year, month in ((previous.year, previous.month), (local.year, local.month))]
+    from datetime import time as clock_time
+    enabled = store.get('reports-enabled-at')
+    enabled_day = datetime.fromisoformat(enabled).astimezone(BANGKOK).date() if enabled else None
+    latest_due = max((due for _, _, due in candidates if due and due < local.date()), default=None)
     at = now.timestamp()
     for year, month, due in candidates:
         cycle = f'{year}-{month:02d}'
@@ -57,17 +61,28 @@ def schedule(settings, store, now):
         # The user's saving habit is on the 28th.  The broker may execute on
         # the next US business day, but the reminder itself must not disappear
         # merely because that date is a weekend or holiday.
-        if (local.date() == calendar_day or due and local.date() == due) and local.hour >= 9:
+        if enabled_day and calendar_day < enabled_day:
+            continue
+        ready = datetime.combine(calendar_day, clock_time(settings.manager_delivery_hour), BANGKOK)
+        updated = bool(due and store.get('dca_updated_date', '') >= due.isoformat())
+        if updated:
+            store.cancel_schedule('dca:'+cycle)
+            store.cancel_schedule('update:'+cycle)
+        execution_ready = datetime.combine(due, clock_time(settings.manager_delivery_hour), BANGKOK) if due else ready
+        if (not updated and ready <= now < execution_ready+timedelta(days=settings.manager_catchup_days)):
+            prefix = (f"รอบ DCA วันที่ {plan['day']} ครับ" if local.date() == calendar_day else
+                      f"ตามเก็บเตือน DCA รอบ {cycle} ที่ยังไม่ได้แจ้งครับ")
             store.enqueue('dca:'+cycle,
-                          f"วันนี้วันที่ {plan['day']} · รอบ DCA ตามแผน {plan['monthly_total']:,.0f} {plan['currency']} · ตัวละ {plan['per_stock']:,.0f} {plan['currency']}\n"
+                          prefix+f" · ตามแผน {plan['monthly_total']:,.0f} {plan['currency']} · ตัวละ {plan['per_stock']:,.0f} {plan['currency']}\n"
                           'ตรวจเงินพร้อมและสถานะ Auto DCA ใน Dime; หากตลาดปิด โบรกเกอร์อาจเลื่อนไปวันทำการ\n'
                           'หลังรายการสำเร็จ พิมพ์ อัปเดต เพื่อกรอกยอดจริง ระบบนี้ไม่ได้สั่งซื้อให้',
-                          at, settings.manager_push_limit)
-        if (due and local.date() >= due+timedelta(days=1) and local.hour >= 18
-                and store.get('dca_updated_date', '') < due.isoformat()):
+                          at, settings.manager_push_limit, scheduled_for=ready.timestamp())
+        if (due and due == latest_due and not updated and now >= datetime.combine(
+                due+timedelta(days=1), clock_time(settings.manager_delivery_hour), BANGKOK)):
             store.enqueue('update:'+cycle,
                           'ตรวจรายการ DCA สำเร็จหรือยังครับ? ถ้าซื้อแล้ว อัปเดตจำนวนหุ้นและต้นทุนจาก Dime เพื่อให้มูลค่าและกำไรพอร์ตถูกต้อง\n'
-                          'พิมพ์ อัปเดต เพื่อดูขั้นตอน', at, settings.manager_push_limit)
+                          'พิมพ์ อัปเดต เพื่อดูขั้นตอน', at, settings.manager_push_limit,
+                          scheduled_for=datetime.combine(due+timedelta(days=1), clock_time(settings.manager_delivery_hour), BANGKOK).timestamp())
     # Close reports and weekly news run in the independent research worker.
 
 
@@ -148,6 +163,7 @@ def process_one(settings, store, notifier, reply_tokens, now=None):
             result = 'อ่านข้อมูลหรือวิเคราะห์ไม่สำเร็จ ระบบไม่ได้ทำธุรกรรม ลองใหม่ภายหลังครับ'
         store.finish(item['id'], result, now.timestamp())
         if token:
+            store.start_delivery(item['id'])
             try:
                 notifier.reply(result, token)
             except NotificationError:
@@ -156,8 +172,9 @@ def process_one(settings, store, notifier, reply_tokens, now=None):
                 log.warning('LINE reply not confirmed; owner can resend command')
             else:
                 store.delivered(item['id'])
-    pending = store.pending(now.timestamp())
+    pending = store.pending(now.timestamp(), settings.manager_push_limit)
     if pending:
+        store.start_delivery(pending['id'])
         try:
             notifier.send(pending['message'], pending['retry_key'], settings.line_user_id)
         except NotificationError as exc:

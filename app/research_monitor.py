@@ -16,7 +16,7 @@ def initialize(store,now):
         db.execute("INSERT OR IGNORE INTO state VALUES('research-enabled-at',?)",(now.isoformat(),))
 
 
-def stage(store,items,now):
+def stage(store,items,now,catchup_days=7):
     enabled=datetime.fromisoformat(store.get('research-enabled-at'))
     with store.connect() as db:
         for item in items:
@@ -26,16 +26,20 @@ def stage(store,items,now):
             title=re.sub(r'\s+-\s+[^-]+$','',item['title']).lower()
             key=item['source_id'] if item['source_id'].startswith('sec:') else 'title:'+hashlib.sha256(
                 (item['symbol']+at.date().isoformat()+re.sub(r'\W+','',title)).encode()).hexdigest()
-            state='pending' if max(enabled,now-timedelta(hours=48))<=at<=now else 'baseline'
+            state='pending' if max(enabled,now-timedelta(days=catchup_days))<=at<=now else 'baseline'
             db.execute('INSERT OR IGNORE INTO research_events VALUES(?,?,?,?,NULL)',
                        (key,at.timestamp(),json.dumps(item,ensure_ascii=False),state))
+            if state == 'pending':
+                # Upgrade previously ignored/expired discoveries within the new
+                # lookback; sent/queued/working events retain their identities.
+                db.execute("UPDATE research_events SET state='pending',batch=NULL WHERE id=? AND state IN ('baseline','expired')", (key,))
 
 
-def reserve_batch(store,now):
+def reserve_batch(store,now,catchup_days=7):
     day=now.astimezone(ZoneInfo('Asia/Bangkok')).date().isoformat()
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        db.execute("UPDATE research_events SET state='expired' WHERE state IN ('pending','working') AND published<?",((now-timedelta(hours=48)).timestamp(),))
+        db.execute("UPDATE research_events SET state='expired' WHERE state IN ('pending','working') AND published<?",((now-timedelta(days=catchup_days)).timestamp(),))
         existing=db.execute("SELECT batch FROM research_events WHERE state='working' ORDER BY published LIMIT 1").fetchone()
         if existing:
             key=existing[0]
@@ -76,6 +80,13 @@ def render(settings,store,key,items,now):
     else:
         message='พบข้อมูลใหม่ครับ (รอบนี้ยังไม่มีบทวิเคราะห์ AI)\n\n'+'\n\n'.join(i['symbol']+' · '+i['title'] for i in enriched)
         message+='\n\nควรอ่านต้นฉบับก่อนพิจารณาเปลี่ยนแผนครับ'
+    local_day = now.astimezone(ZoneInfo('Asia/Bangkok')).date()
+    delayed = any(datetime.fromisoformat(i['published_at']).astimezone(ZoneInfo('Asia/Bangkok')).date() < local_day
+                  or now-datetime.fromisoformat(i['published_at']) >= timedelta(hours=4) for i in items)
+    dates = '\n'.join(i['symbol']+' · '+datetime.fromisoformat(i['published_at']).astimezone(
+        ZoneInfo('Asia/Bangkok')).strftime('%d/%m/%Y %H:%M น.') for i in items)
+    heading = 'ตามเก็บข่าวที่ยังไม่ได้แจ้งครับ\n' if delayed else ''
+    message = heading+'เผยแพร่ข่าว (เวลาไทย)\n'+dates+'\n\n'+message
     message+='\n\nข่าวเว็บอ่านจากหัวข่าว; เอกสาร SEC อ่านได้เฉพาะส่วนที่แนบ ไม่รับรองว่าครบทุกประเด็น'
     message+='\n'+'\n'.join(news_reference(i) for i in enriched)
     store.save_brief(key,'research_alert',now.timestamp(),message,payload,bool(answer))
@@ -106,7 +117,7 @@ def run_due(settings,store,now=None):
             try:
                 feeds=fetch()
                 items=[i for feed in feeds.values() for i in feed['items']]
-                stage(store,items,now)
+                stage(store,items,now,settings.manager_catchup_days)
                 if label=='filings':
                     db=Database(settings.database_path,'live')
                     try:
@@ -124,7 +135,7 @@ def run_due(settings,store,now=None):
         except Exception as exc:
             statuses['fundamentals']={'error':type(exc).__name__}
         store.set('research-status',json.dumps(dict(at=now.isoformat(),sources=statuses)))
-    key,items=reserve_batch(store,now)
+    key,items=reserve_batch(store,now,settings.manager_catchup_days)
     if not key:
         return
     saved=store.brief(key)

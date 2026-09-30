@@ -35,7 +35,7 @@ def test_two_batches_per_day_and_expiry(settings,now):
         with store.connect() as db:
             db.execute("UPDATE research_events SET state='queued' WHERE batch=?",(key,))
     assert reserve_batch(store,now)==(None,[])
-    assert reserve_batch(store,now+timedelta(hours=49))==(None,[])
+    assert reserve_batch(store,now+timedelta(days=8))==(None,[])
 
 
 def test_sec_identity_times_and_paths(now):
@@ -80,6 +80,6 @@ def test_monitor_restart_reuses_saved_message_and_failed_queue(settings,now,monk
     run_due(settings,store,now)
     assert store.pending(now.timestamp()) is None
     run_due(replace(settings,manager_push_limit=8),ManagerStore(store.path),now+timedelta(minutes=1))
-    assert len(calls)==1 and store.pending((now+timedelta(minutes=1)).timestamp())['message']=='saved'
+    assert len(calls)==1 and store.pending((now+timedelta(minutes=1)).timestamp())['message'].startswith('saved\n\nเวลาแจ้งเตือน')
     run_due(settings,store,now+timedelta(minutes=2))
     assert len(calls)==1

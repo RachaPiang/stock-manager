@@ -1,36 +1,30 @@
-# Register once: start the private LINE assistant when this Windows account logs in.
-# The app's own lock prevents duplicate workers when Open Portfolio.cmd is used too.
-param([string]$TaskName = 'StockManager-LINEBot-AtLogon')
+# Install a quiet per-user logon launcher for the LINE bot and market monitor.
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $pythonPath = Join-Path $projectRoot '.venv\Scripts\pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
-    throw 'Create the project virtual environment before registering the LINE bot task.'
+    throw 'Create the project virtual environment with pythonw.exe before enabling automatic start.'
 }
-if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    Write-Host 'The LINE auto-start task already exists; it was left unchanged.'
-    exit 0
+
+$startup = [Environment]::GetFolderPath('Startup')
+$launcher = Join-Path $startup 'StockManager-AutoStart.vbs'
+if (Test-Path -LiteralPath $launcher) {
+    $existing = Get-Content -LiteralPath $launcher -Raw -ErrorAction Stop
+    if (-not $existing.Contains($projectRoot)) { throw 'A different file already uses the Stock Manager startup name; it was left unchanged.' }
 }
-try {
-    $action = New-ScheduledTaskAction -Execute $pythonPath -Argument '-m app.line_webhook' -WorkingDirectory $projectRoot
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Days 30)
-    $account = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Starts the private Stock Manager LINE assistant after Windows sign-in. No trading.' -ErrorAction Stop | Out-Null
-    Write-Host 'LINE bot auto-start is enabled through Task Scheduler.'
-    exit 0
-} catch {
-    # Some Windows policies deny creating an interactive scheduled task. The
-    # per-user Startup folder needs no administrator access and starts the same
-    # hidden pythonw worker after sign-in.
-    $startup = [Environment]::GetFolderPath('Startup')
-    $launcher = Join-Path $startup 'StockManager-LINEBot.cmd'
-    # This file is owned by this installer; rewrite it so a project-path
-    # change or a previous partial creation cannot leave a broken launcher.
-    @(
-        '@echo off',
-        ('start "" /b "{0}" -m app.line_webhook' -f $pythonPath)
-    ) | Set-Content -LiteralPath $launcher -Encoding ascii
-    Write-Host 'Windows denied the scheduled task. LINE bot auto-start is enabled through this account Startup folder.'
+$vbs = @"
+Set shell = CreateObject("WScript.Shell")
+shell.Run Chr(34) & "$pythonPath" & Chr(34) & " -m app.line_webhook", 0, False
+shell.Run Chr(34) & "$pythonPath" & Chr(34) & " -m app.market_daemon", 0, False
+"@
+Set-Content -LiteralPath $launcher -Value $vbs -Encoding ascii
+$oldLauncher = Join-Path $startup 'StockManager-LINEBot.cmd'
+if (Test-Path -LiteralPath $oldLauncher) {
+    $oldContents = Get-Content -LiteralPath $oldLauncher -Raw -ErrorAction SilentlyContinue
+    if ($oldContents -and $oldContents.Contains($projectRoot)) {
+        Remove-Item -LiteralPath $oldLauncher -ErrorAction SilentlyContinue
+    }
 }
+try { Disable-ScheduledTask -TaskName 'StockManager-Market5Minutes' -ErrorAction Stop | Out-Null } catch { }
+try { Disable-ScheduledTask -TaskName 'StockManager-LINEBot-AtLogon' -ErrorAction Stop | Out-Null } catch { }
+Write-Host 'หน้าต่างไม่แสดงตอนล็อกอิน · LINE และเครื่องตรวจตลาดจะทำงานเบื้องหลัง'

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.database import Database, AlreadyRunning
+from app.config import load_watchlist
 from app.period_reports import due_periods, period_numbers, render_period
 from app.voice import STYLE, answer_text
 
@@ -33,7 +34,7 @@ def portfolio_review(settings, report, numbers, key, now):
         'หากราคาไม่ครบหรือล้าสมัยห้ามแนะนำซื้อทันทีจากราคานั้น '
         'ไม่มีวงเงินลงทุนเพิ่ม ห้ามนำเงินสำรองมาใช้หรือกำหนดวงเงินเอง '
         'ผลของช่วงนี้คำนวณด้วยจำนวนหุ้นปัจจุบันคงที่ ไม่ใช่ผลตอบแทนจริงหลังเงินเข้าออก '
-        'หากหลักฐานไม่พอให้บอกเฉพาะข้อมูลที่ขาด ไม่แต่งข้อเสนอเพื่อให้ดูเหมือนมีคำแนะนำ')
+        'หากหลักฐานไม่พอให้บอกเฉพาะข้อมูลที่ขาด ไม่แต่งข้อเสนอเพื่อให้ดูเหมือนมีคำแนะนำ', private=True)
     text = answer_text(answer) if answer else 'รอบนี้ผมสรุปตัวเลขให้ก่อนครับ ส่วนบทวิเคราะห์ AI ยังไม่พร้อม'
     if answer:
         sources = source_buttons(payload)
@@ -42,8 +43,10 @@ def portfolio_review(settings, report, numbers, key, now):
     return text, payload, bool(answer)
 
 
-def interpret(settings, key, payload, now, instruction):
-    if settings.analyst_mode != 'codex':
+def interpret(settings, key, payload, now, instruction, *, private=False):
+    if settings.analyst_mode not in {'codex', 'gemini'}:
+        return None
+    if settings.analyst_mode == 'gemini' and private and not settings.gemini_share_portfolio_context:
         return None
     db = Database(settings.database_path, 'live')
     try:
@@ -53,10 +56,10 @@ def interpret(settings, key, payload, now, instruction):
         db.close()
     if not allowed:
         return None
-    from app.codex_client import analyze, CodexError
     try:
+        from app.ai_client import analyze
         return analyze(settings, STYLE+'\n'+instruction+'\n'+json.dumps(payload, ensure_ascii=False, allow_nan=False))
-    except CodexError:
+    except Exception:
         log.warning('Brief AI unavailable; saved numeric/source-based fallback')
         return None
 
@@ -96,26 +99,49 @@ def run_due(settings, store, now=None):
         enabled = now.isoformat()
         store.set('reports-enabled-at', enabled)
     enabled_at = datetime.fromisoformat(enabled)
-    periods = [p for p in due_periods(now) if p['ready'] >= enabled_at]
+    periods = [p for p in due_periods(now, settings.manager_delivery_hour, settings.manager_catchup_days)
+               if p['closed'] >= enabled_at]
     missing = [p for p in periods if not store.brief(p['key'])]
-    if missing:
-        # Price budget/caches are shared with the normal price task. One
-        # hourly attempt; report retries never trigger a minute-by-minute fetch.
-        last_sync = float(store.get('brief-close-sync-at', '0'))
-        if now.timestamp()-last_sync >= 3600:
-            from app.close_sync import sync_close
+    # Also recover prices on startup before the evening delivery time. Shared
+    # history caches, locks and API accounting keep this to one hourly attempt.
+    last_sync = float(store.get('brief-close-sync-at', '0'))
+    if now.timestamp()-last_sync >= 3600:
+        from app.close_sync import sync_close
+        try:
+            result = sync_close(settings, now)
+        except AlreadyRunning:
+            return  # The price task is writing; try next scheduler tick.
+        store.set('brief-close-sync-at', str(now.timestamp()))
+        if result and result['updated']:
+            from app.report import write_report
+            write_report(settings, now)
+        from app.market import completed_session, session_close
+        target = completed_session(now)
+        if (target and session_close(target) >= enabled_at
+                and store.get('close-signals-through') != target.isoformat()):
+            from app.close_sync import check_close_signals
             try:
-                sync_close(settings, now)
+                signals = check_close_signals(settings, now)
             except AlreadyRunning:
-                return  # The price task is writing; try next scheduler tick.
-            store.set('brief-close-sync-at', str(now.timestamp()))
+                signals = None
+            if signals and signals['checked'] == len(load_watchlist(settings.watchlist_path)) and not signals['errors']:
+                store.set('close-signals-through', target.isoformat())
+    if missing:
         from app.report import report_data
         report = report_data(settings, now)
         for period in missing:
             numbers = period_numbers(report, period)
-            if not numbers['complete'] and now < period['ready']+timedelta(hours=2):
-                continue
+            if not numbers['complete']:
+                wait_key = 'brief-wait:'+period['key']
+                first_try = store.get(wait_key)
+                if not first_try:
+                    first_try = now.isoformat()
+                    store.set(wait_key, first_try)
+                if now < datetime.fromisoformat(first_try)+timedelta(hours=2):
+                    continue
             message = render_period(numbers, period['kind'])
+            if now.astimezone(BANGKOK).date() > period['ready'].astimezone(BANGKOK).date():
+                message = 'ตามเก็บสรุปที่ยังไม่ได้ส่งครับ\n\n'+message
             answer = None
             saved_payload = numbers
             if numbers['complete'] and period['kind'] != 'daily':
@@ -126,13 +152,17 @@ def run_due(settings, store, now=None):
     for period in periods:
         saved = store.brief(period['key'])
         if saved:
-            store.enqueue('close:'+period['key'], saved['message'], now.timestamp(), settings.manager_push_limit)
+            store.enqueue('close:'+period['key'], saved['message'], now.timestamp(), settings.manager_push_limit,
+                          scheduled_for=period['ready'].timestamp())
 
-    # Monday 08:00 Bangkok. Bounded catch-up until Thursday, no old-week replay.
+    # Monday evening Bangkok; replay only the latest eligible week after downtime.
     local = now.astimezone(BANGKOK)
     monday = local.date()-timedelta(days=local.weekday())
-    ready = datetime.combine(monday, time(8), BANGKOK)
-    if not ready >= enabled_at or not ready <= now < ready+timedelta(days=3):
+    ready = datetime.combine(monday, time(settings.manager_delivery_hour), BANGKOK)
+    if now < ready:
+        monday -= timedelta(days=7)
+        ready -= timedelta(days=7)
+    if not ready >= enabled_at or not ready <= now < ready+timedelta(days=7):
         return
     key = 'web-week:'+monday.isoformat()
     saved = store.brief(key)
@@ -146,4 +176,4 @@ def run_due(settings, store, now=None):
         message, compact, ai_used = build_news_brief(settings, coverage, key, now)
         store.save_brief(key, 'news_weekly', now.timestamp(), message, compact, ai_used)
         saved = store.brief(key)
-    store.enqueue(key, saved['message'], now.timestamp(), settings.manager_push_limit)
+    store.enqueue(key, saved['message'], now.timestamp(), settings.manager_push_limit, scheduled_for=ready.timestamp())

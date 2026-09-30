@@ -52,7 +52,8 @@ def command(settings, store, event_id, text, now=None):
             ok=sum(v in {'ok','available'} for v in feeds.values())
             lines.append(f'{labels.get(kind,kind)}: สำเร็จ {ok}/{len(feeds)} แหล่ง')
         lines+=['','ตรวจทุก 4 ชั่วโมง · ข่าว/เอกสารใหม่รวมไม่เกิน 2 ชุดต่อวัน',
-                'เริ่มนับข่าวใหม่ตั้งแต่เปิดระบบติดตาม ไม่ส่งข่าวเก่าย้อนหลังเป็นข่าวด่วน',
+                f'ตามเก็บข่าวที่ยังไม่แจ้งย้อนหลัง {settings.manager_catchup_days} วัน พร้อมวันที่ประกาศ',
+                f'สรุปตามรอบเวลา {settings.manager_delivery_hour:02d}:00 น. ไทย · เปิดเครื่องช้าตามเก็บรอบที่ค้าง',
                 'สถานะ: '+('พักแจ้งเตือน' if store.get('paused')=='1' else 'เปิดติดตาม')]
         return '\n'.join(lines)
     if text in {'พักแจ้งเตือน', 'เปิดแจ้งเตือน'}:
@@ -177,8 +178,10 @@ def command(settings, store, event_id, text, now=None):
                 'รับคำสั่งได้เมื่อเครื่อง บอต และ tunnel ทำงานพร้อมกัน')
     if not text.startswith('ถาม '):
         return 'ใช้ “ถาม ตามด้วยคำถาม” เมื่อต้องการให้ AI วิเคราะห์ใหม่ครับ\n\n'+MENU
-    if settings.mock_mode or settings.analyst_mode != 'codex':
-        return 'ยังไม่ได้เปิด Codex สำหรับวิเคราะห์คำถาม ข้อมูลทั่วไปใช้เมนูได้โดยไม่เรียก AI'
+    if settings.mock_mode or settings.analyst_mode not in {'codex', 'gemini'}:
+        return 'ยังไม่ได้เปิด AI สำหรับวิเคราะห์คำถาม ข้อมูลทั่วไปใช้เมนูได้โดยไม่เรียก AI'
+    if settings.analyst_mode == 'gemini' and not settings.gemini_share_portfolio_context:
+        return 'ยังไม่ส่งข้อมูลพอร์ตส่วนตัวไป Google ครับ หากต้องการถาม Gemini เรื่องพอร์ต ให้เปิด GEMINI_SHARE_PORTFOLIO_CONTEXT=true ใน .env หลังทบทวนเงื่อนไขข้อมูลของ Google'
     db = Database(settings.database_path, 'live')
     try:
         allowed = db.reserve_ai('line:'+event_id, '__line_chat__', now,
@@ -187,15 +190,15 @@ def command(settings, store, event_id, text, now=None):
         db.close()
     if not allowed:
         return 'ถึงเพดาน AI วันนี้ หรือคำถามนี้เคยถูกประมวลผลแล้ว ใช้ พอร์ต / ข่าว / รีวิว ได้โดยไม่เรียก AI'
-    from app.codex_client import analyze, CodexError
     from app.review import review_payload
     payload = review_payload(portfolio, report['news']) if portfolio else {'limitations': 'No portfolio data'}
     prompt = (STYLE+'\ncheck_more ตอบคำถามตรง ๆ อ้างอิงข่าวด้วยชื่อสำนักและวันที่เฉพาะที่ใช้: '
               + json.dumps({'question': text[4:][:2000], 'data': payload}, ensure_ascii=False))
     try:
+        from app.ai_client import analyze
         answer = analyze(settings, prompt)
         return answer_text(answer)
-    except CodexError:
+    except Exception:
         return 'วิเคราะห์ไม่สำเร็จ นับเป็นหนึ่งความพยายามในโควตาแล้ว ระบบจะไม่เรียก AI ซ้ำเอง กรุณาลองภายหลัง'
 
 

@@ -9,7 +9,7 @@ import webbrowser
 from datetime import UTC, datetime, timedelta
 from logging.handlers import RotatingFileHandler
 
-from app.analyst import AnalysisError, Analyst, CodexAnalyst, OpenAIAnalyst, TemplateAnalyst
+from app.analyst import AnalysisError, Analyst, CodexAnalyst, GeminiAnalyst, OpenAIAnalyst, TemplateAnalyst
 from app.config import ROOT, Settings, load_watchlist
 from app.database import AlreadyRunning, Database, run_lock
 from app.fetcher import DataError, MockStockProvider, StockProvider, TwelveDataProvider
@@ -67,6 +67,12 @@ def deliver_pending(db: Database, analyst: Analyst, notifier: Notifier, now: dat
             references=source_buttons(payload)
             if references:
                 message+='\n\nแหล่งข้อมูลประกอบ\n'+references
+            if payload.get('caught_up_close'):
+                from app.voice import thai_time
+                message = ('ตามเก็บสัญญาณจากราคาปิดสหรัฐ '+payload['caught_up_close']+' ครับ\n'
+                           'ราคาปิด ณ '+thai_time(payload['quote_as_of'])+' (เวลาไทย)\n'
+                           'ตรวจพบย้อนหลังเมื่อ '+thai_time(now.isoformat())+' (เวลาไทย)\n'
+                           'เป็นข้อมูลราคาปิดย้อนหลัง อ่านวันที่ราคาก่อนพิจารณาครับ\n\n'+message)
             db.set_message(row["id"], message)
         db.start_attempt(row["id"], now)
         try:
@@ -119,6 +125,8 @@ def check(settings: Settings, provider: StockProvider, analyst: Analyst, notifie
                     eligible = db.eligible(events, now, settings.cooldown_hours)
                     if eligible:
                         payload = analysis_payload(snapshot, indicators, eligible)
+                        if snapshot.price_kind == 'daily_close':
+                            payload['caught_up_close'] = snapshot.session_date.isoformat()
                         if not settings.mock_mode:
                             from app.portfolio import load_portfolio, analyst_context
                             profile = load_portfolio(settings.database_path.parent)
@@ -204,10 +212,14 @@ def run_portfolio_review(settings: Settings, now: datetime | None = None) -> dic
             payload = review_payload(profile, overview["news"])
             review_id = "review:" + period
             allowed = (settings.analyst_mode == "codex"
+                       or (settings.analyst_mode == "gemini" and settings.gemini_share_portfolio_context))
+            allowed = (allowed
                        and db.reserve_ai(review_id, "__portfolio_review__", now,
                                          settings.ai_max_calls_per_day, settings.ai_max_calls_per_stock_per_day))
             message, ai_used = create_review(settings, payload) if allowed else (local_review(payload), False)
-            if settings.analyst_mode == "codex" and not allowed:
+            if settings.analyst_mode == "gemini" and not settings.gemini_share_portfolio_context:
+                message += "\nหมายเหตุ: ใช้แม่แบบในเครื่องเพื่อไม่ส่งข้อมูลพอร์ตส่วนตัวไป Google"
+            elif settings.analyst_mode in {"codex", "gemini"} and not allowed:
                 message += "\nหมายเหตุ: ใช้แม่แบบเพื่อจำกัดการเรียก AI"
             db.save_review(period, now, message, len(overview["news"]), ai_used)
             return {"created": True, "ai_used": ai_used, "period": period}
@@ -225,7 +237,7 @@ def main() -> int:
     parser.add_argument("--no-open", action="store_true", help="Generate report without opening browser")
     parser.add_argument("--online", action="store_true", help="doctor: contact APIs without sending LINE messages")
     parser.add_argument("--scheduled", action="store_true", help="check: regular session only, one run per five-minute slot")
-    parser.add_argument("--service", choices=["stock", "codex", "openai", "line", "line-webhook"], help="setup/doctor: select one service")
+    parser.add_argument("--service", choices=["stock", "codex", "openai", "gemini", "line", "line-webhook"], help="setup/doctor: select one service")
     args = parser.parse_args()
     try:
         if args.command == "setup":
@@ -313,7 +325,7 @@ def main() -> int:
             try:
                 settings.validate_connections()
                 provider = MockStockProvider(settings.history_bars) if settings.mock_mode else TwelveDataProvider(settings, market_only=True, intraday_prices=True)
-                analyst = {"openai": OpenAIAnalyst, "codex": CodexAnalyst}.get(settings.analyst_mode, lambda _: TemplateAnalyst())(settings)
+                analyst = {"openai": OpenAIAnalyst, "codex": CodexAnalyst, "gemini": GeminiAnalyst}.get(settings.analyst_mode, lambda _: TemplateAnalyst())(settings)
                 notifier = LineNotifier(settings) if settings.notifier_mode == "line" else ConsoleNotifier()
                 exit_code = 1 if check(settings, provider, analyst, notifier, scheduled=args.scheduled)["errors"] else 0
             except ValueError:

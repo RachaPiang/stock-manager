@@ -60,6 +60,24 @@ def local_review(payload: dict) -> str:
 
 
 def create_review(settings: Settings, payload: dict) -> tuple[str, bool]:
+    if settings.analyst_mode == "gemini":
+        if not settings.gemini_share_portfolio_context:
+            return local_review(payload), False
+        try:
+            import requests
+            prompt = (STYLE + '\nรีวิวพอร์ตระยะยาวจากข้อมูลต่อไปนี้ เป็นภาษาไทย ระบุสิ่งที่ควรตรวจ ทางเลือกแบบมีเงื่อนไข '
+                      'และความเสี่ยง ห้ามสั่งซื้อขาย:\n' + json.dumps(payload, ensure_ascii=False, allow_nan=False))
+            response = requests.post('https://generativelanguage.googleapis.com/v1beta/interactions',
+                headers={'x-goog-api-key': settings.gemini_api_key},
+                json={'model': settings.gemini_model, 'input': prompt, 'store': False}, timeout=settings.http_timeout)
+            response.raise_for_status()
+            result = response.json()
+            output = str(result.get('output_text') or '').strip()
+            if result.get('status') != 'completed' or not output or len(output.encode('utf-16-le')) // 2 > 4000:
+                raise ValueError('Incomplete response')
+            return 'รีวิวพอร์ตจาก AI (Google Gemini; ควรตรวจทาน)\n\n' + output, True
+        except Exception:
+            return local_review(payload) + '\nหมายเหตุ: Gemini ใช้งานไม่ได้ จึงใช้แม่แบบสำรอง', False
     if settings.analyst_mode != "codex":
         return local_review(payload), False
     prompt = STYLE + '\nรีวิวพอร์ตระยะยาวจากข้อมูลต่อไปนี้:\n' + json.dumps(payload, ensure_ascii=False, allow_nan=False)

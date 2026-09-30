@@ -59,7 +59,7 @@ def test_monday_all_symbols_news_once_and_readable_sources(settings, tmp_path, m
         calls.append(1)
         return {symbol: {'status': 'ok', 'items': []} for symbol in TOPICS}
     monkeypatch.setattr('app.web_news.collect', collect)
-    before = datetime(2026, 9, 28, 0, 59, tzinfo=UTC)
+    before = datetime(2026, 9, 28, 10, 59, tzinfo=UTC)
     run_due(settings, store, before)
     assert calls == []
     now = before+timedelta(minutes=1)
