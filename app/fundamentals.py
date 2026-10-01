@@ -129,5 +129,5 @@ if __name__ == '__main__':
     from app.config import Settings, load_watchlist
     settings = Settings.from_env()
     if not settings.mock_mode:
-        rows = collect(settings, [s.symbol for s in load_watchlist(settings.watchlist_path)], datetime.now(UTC))
+        rows = collect(settings, [s.symbol for s in settings.stocks()], datetime.now(UTC))
         print('SEC fundamentals: '+', '.join(f'{s}={r["status"]}' for s, r in rows.items()))

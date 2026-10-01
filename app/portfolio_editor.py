@@ -76,7 +76,7 @@ def save_holdings(path, changes, now=None, expected_digest=None):
         return backup.name
 
 
-def main():
+def main(portfolio_id=''):
     import tkinter as tk
     from tkinter import ttk, messagebox
     from app.config import Settings
@@ -95,8 +95,15 @@ def main():
         settings = Settings.from_env()
         if settings.mock_mode:
             raise ValueError('เปิดโหมดข้อมูลจริงก่อนแก้พอร์ตส่วนตัว')
-        path = settings.database_path.parent / 'portfolio-profile.json'
+        from dataclasses import replace
+        from app.portfolio_catalog import PortfolioCatalog
+        settings = replace(settings,portfolio_id=portfolio_id)
+        catalog = PortfolioCatalog(settings)
+        path = catalog.profile_path()
+        root.title('Stock Manager · '+catalog.selected()['name']+' · บันทึกยอด')
         raw = json.loads(path.read_text(encoding='utf-8'))
+        import hashlib
+        digest = hashlib.sha256(path.read_text(encoding='utf-8').encode()).hexdigest()
         validate_portfolio(copy.deepcopy(raw))
     except (ValueError, OSError):
         messagebox.showerror('ยังเปิดพอร์ตไม่ได้', 'ตรวจโหมดข้อมูลจริงและไฟล์ข้อมูลพอร์ต', parent=root)
@@ -119,7 +126,7 @@ def main():
     def save():
         try:
             changes = {symbol: dict(quantity=q.get().strip(), cost_basis_usd=c.get().strip()) for symbol, (q, c) in entries.items()}
-            backup = save_holdings(path, changes)
+            backup = save_holdings(path, changes, expected_digest=digest)
         except (ValueError, OSError, RuntimeError) as exc:
             messagebox.showerror('ยังไม่บันทึก', str(exc), parent=root)
             return

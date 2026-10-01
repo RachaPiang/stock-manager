@@ -32,7 +32,7 @@ main{display:flex;flex-direction:column;gap:20px;max-width:1440px}header{order:0
 <body>
 <main>
 <header><div class="brand"><div class="mark" aria-hidden="true">↗</div><div><div class="wordmark">STOCK MANAGER</div><div class="eyebrow">YOUR LONG-TERM VIEW</div></div></div><div class="header-actions"><span class="badge" id="mode">กำลังโหลด</span><a href="#help" class="button">วิธีใช้งาน</a></div></header>
-<div class="intro"><div><h1>พอร์ตของฉัน</h1><p class="subtitle">เห็นเงินออมทั้งพอร์ต แล้วค่อยเจาะลึกหุ้นที่สนใจ</p></div><div class="asof">ข้อมูลหน้าเว็บ <span id="generated"></span><br>เวลาที่แสดงเป็นเวลาไทย · กรุงเทพฯ<div id="run-warning" class="run-warning"></div></div></div>
+<div class="intro"><div><h1 id="portfolio-name">พอร์ตของฉัน</h1><p class="subtitle">เห็นเงินออมทั้งพอร์ต แล้วค่อยเจาะลึกหุ้นที่สนใจ</p><div class="chart-tools"><label for="portfolio-picker">เลือกพอร์ต <select id="portfolio-picker" aria-label="เลือกพอร์ตที่ต้องการดู"></select></label><button type="button" class="button" id="portfolio-settings-button">จัดการพอร์ต / ความสำคัญ</button></div></div><div class="asof">ข้อมูลหน้าเว็บ <span id="generated"></span><br>เวลาที่แสดงเป็นเวลาไทย · กรุงเทพฯ<div id="run-warning" class="run-warning"></div></div></div>
 <nav class="portfolio-nav" aria-label="เมนูพอร์ต"><a class="button" href="#portfolio-overview">ภาพรวม</a><a class="button" href="#holdings-panel">หุ้นที่ถือ</a><a class="button" href="#allocation-panel">สัดส่วน</a><a class="button" href="#research-panel">รีวิวและข่าว</a></nav>
 <section class="portfolio-hero" id="portfolio-overview" aria-label="มูลค่าและกราฟพอร์ตทั้งหมด">
 <div class="chart-heading"><div><h2>มูลค่าหุ้นรวม</h2><small>USD · จากจำนวนหุ้นที่บันทึกและราคาล่าสุดที่มี</small></div><div class="portfolio-summary-actions"><button class="button" id="reload-portfolio" type="button">↻ โหลดข้อมูลที่บันทึกล่าสุด</button><a class="button" id="manage-portfolio-link" href="#manage-portfolio">บันทึกยอดหลัง DCA</a></div></div>
@@ -45,7 +45,7 @@ main{display:flex;flex-direction:column;gap:20px;max-width:1440px}header{order:0
 <p class="basis-note" id="portfolio-history-note"></p><svg id="portfolio-chart" class="portfolio-chart" viewBox="0 0 960 300" role="img" tabindex="0" aria-label="กราฟมูลค่าพอร์ต USD"></svg>
 <div id="portfolio-hover" class="portfolio-detail" aria-live="polite">กำลังเตรียมกราฟพอร์ต</div><label class="explain" for="portfolio-point">เลื่อนดูแต่ละจุด · แตะกราฟเพื่อตรึง · ใช้ปุ่มลูกศรเพื่อเลื่อน</label><input id="portfolio-point" type="range" min="0" max="0" value="0"><p id="portfolio-range-result" class="basis-note"></p></div>
 <div class="dca-strip"><strong id="portfolio-dca">แผน DCA</strong><span id="portfolio-dca-detail"></span></div>
-<details id="manage-portfolio"><summary>จัดการข้อมูลพอร์ตและตรวจความครบถ้วน</summary><p class="explain">หลัง DCA ให้บันทึกจำนวนหุ้นรวมและต้นทุนรวมจาก Dime ผ่าน <b>Edit Portfolio.cmd</b> ในโฟลเดอร์ stock-manager ราคาจะคำนวณยอดใหม่ให้อัตโนมัติเมื่อมีข้อมูลเข้า</p><div id="portfolio-checks" class="quality-list"></div><p class="explain">กราฟติดตามเริ่มจากวันที่บันทึกจำนวนหุ้น เงินสด ปันผล ค่าธรรมเนียม และผลจากอัตราแลกเปลี่ยนยังไม่รวมในยอดนี้</p></details>
+<details id="manage-portfolio"><summary>จัดการข้อมูลพอร์ตและตรวจความครบถ้วน</summary><p class="explain">เปิด <b>Manage Portfolios.cmd</b> ในโฟลเดอร์ stock-manager เพื่อเพิ่มพอร์ต เพิ่มหุ้น แก้ยอด ตั้งแผน DCA และปรับความสำคัญ · หน้าตั้งค่าทำงานบนเครื่อง ไม่มีการเปิดบริการใหม่สู่อินเทอร์เน็ต</p><p class="explain">หน้านี้แสดงพอร์ตที่คุณเลือกดู ส่วน LINE เลือกแยกได้ด้วย <b>พอร์ตทั้งหมด</b> และ <b>เลือกพอร์ต 2</b> · ทุกพอร์ตยังถูกติดตามพร้อมกัน</p><div id="portfolio-checks" class="quality-list"></div><details id="budget-debug"><summary>งบติดตาม / Debug · รวมทุกพอร์ต</summary><p id="budget-summary" class="explain"></p><div class="holdings-table-wrap"><table><thead><tr><th>หุ้นไม่ซ้ำ</th><th>ความสำคัญรวม</th><th>ตรวจราคา/วัน</th><th>ห่างเฉลี่ย</th><th>AI สิทธิ์/ใช้แล้ว</th></tr></thead><tbody id="budget-rows"></tbody></table></div><p class="explain">ความสำคัญคือการแบ่งทรัพยากร ไม่ใช่สัดส่วนเงินลงทุน · ตัวเลขเป็นแผนตลาดเปิดเต็มวัน เครื่องปิดจะตรวจน้อยลง · AI เรียกเมื่อมีเหตุการณ์ สิทธิ์ 0 ยังมีการเตือนจากแม่แบบ · สิทธิ์เป็นจำนวนครั้ง ไม่ใช่จำนวนโทเค็นจริง · หุ้นน้ำหนักเท่ากันสลับสิทธิ์ตามวัน UTC · บริการข่าว/SEC ของหุ้นใหม่อาจยังไม่รองรับ</p></details><p class="explain">กราฟติดตามเริ่มจากวันที่บันทึกจำนวนหุ้น เงินสด ปันผล ค่าธรรมเนียม และผลจากอัตราแลกเปลี่ยนยังไม่รวมในยอดนี้</p></details>
 </section>
 <details id="system-details"><summary>สถานะการเชื่อมต่อและรอบตรวจหุ้น</summary>
 <div id="notice" class="notice"></div>
@@ -126,7 +126,7 @@ $('mode').textContent=data.mock?'โหมดทดลอง · MOCK':'ข้อ
 $('generated').textContent=stamp(data.generated_at);
 $('notice').textContent=data.mock?'ข้อมูลและราคาทั้งหมดในหน้านี้เป็นข้อมูลสมมุติสำหรับทดสอบ · คำอธิบายจากแม่แบบในเครื่อง · ยังไม่ได้ส่ง LINE':'แสดงข้อมูลที่เก็บไว้จากผู้ให้บริการ ดูวันที่ของราคาและกราฟประกอบทุกครั้ง · การเปิดรายงานไม่เรียก API เพิ่ม';
 $('notice').classList.toggle('live',!data.mock);
-$('budget').textContent=data.mock?'ตัวอย่างแผน: ตรวจทุก 5 นาทีเฉพาะตลาดเปิด · ประมาณ 711/800 credits ต่อวันเต็ม · โหมดจำลองไม่ใช้เครดิต':`ตลาดตามปฏิทิน: ${data.market.open?'เปิด':'ปิด / นอกปีที่รองรับ'} · แผนทุก 5 นาที · โปรแกรมนับ ${data.market.used}/${data.market.limit} credits วันนี้ UTC (${data.market.utc_day}) · โควตาบัญชี 800 · ไม่รวมการใช้จากแอปอื่น · ไม่ใช่สถานะยืนยันว่าเปิดตารางแล้ว`;
+$('budget').textContent=data.mock?'โหมดจำลองไม่ใช้เครดิตราคาหรือ AI':`ตลาดตามปฏิทิน: ${data.market.open?'เปิด':'ปิด / นอกปีที่รองรับ'} · รอบตรวจแบ่งตามความสำคัญ · โปรแกรมนับ ${data.market.used}/${data.market.limit} credits วันนี้ UTC (${data.market.utc_day}) · โควตาบัญชี 800 · ไม่รวมการใช้จากแอปอื่น · ไม่ใช่สถานะยืนยันว่าเปิดตารางแล้ว`;
 if(data.last_run?.errors)$('run-warning').textContent='รอบล่าสุดมีข้อผิดพลาด '+data.last_run.errors+' รายการ · บางหุ้นอาจเป็นข้อมูลเดิม';
 if(Date.now()-new Date(data.generated_at).getTime()>3600000)$('run-warning').textContent+=' รายงานนี้สร้างเกิน 1 ชั่วโมงแล้ว';
 $('count').textContent=data.stocks.length;
@@ -187,6 +187,7 @@ function donutPath(cx,cy,r,start,end){
 }
 function renderAllocation(p){
  $('allocation-panel').hidden=false;$('sector-donut').replaceChildren();$('sector-legend').replaceChildren();$('exposure-bars').replaceChildren();
+ if(!p.live?.complete&&p.total_usd==null){$('allocation-subtitle').textContent='ยังไม่มีราคาครบ ไม่ใช้ต้นทุนแทนมูลค่าตลาดในการวาดสัดส่วน';return;}
  const allocation=p.live?.complete?p.live.allocations:p.allocations, total=p.live?.complete?p.live.total_usd:p.total_usd;
  let angle=-90;
  const groups=$('allocation-view').value==='holdings'?p.holdings.map(h=>({label:h.symbol,value_usd:p.live?.complete?h.live_value_usd:h.value_usd,weight_pct:p.live?.complete?h.live_weight_pct:h.weight_pct})):allocation.sectors;
@@ -240,6 +241,7 @@ function renderSelected(){
  $('chart-dates').textContent=bars.length?day(bars[0].start||bars[0].day)+' – '+day(bars.at(-1).end||bars.at(-1).day)+' · '+bars.length+' แท่ง':'ไม่มีข้อมูลตามช่วงและความละเอียดที่เลือก ลองเลือกแท่ง 1 วันหรือช่วงอื่น';
  $('sma20').textContent=number(s.indicators?.sma20);$('sma50').textContent=number(s.indicators?.sma50);$('rsi').textContent=number(s.indicators?.rsi14);
  $('insight').textContent=intraday?'SMA / RSI ที่แสดงเป็นรายวัน ไม่ใช่ตัวชี้วัดรายนาที · ข้อมูลละเอียดมีเท่าที่บันทึก':s.note||'ราคา ณ '+stamp(s.as_of)+' · ยังไม่ใช่การประเมินมูลค่าที่เหมาะสม';
+ if(s.research_coverage?.sec==='unsupported')$('insight').textContent+=' · ยังไม่เชื่อม SEC/งบสำหรับหุ้นนี้; ข่าวค้นด้วย ticker อาจตกหล่น';
  $('signals').replaceChildren();
  if(s.stale)$('signals').append(element('div','empty',s.note));else if(!s.signals.length)$('signals').append(element('div','empty','ไม่พบสัญญาณถึงเกณฑ์จากข้อมูลชุดนี้'));else s.signals.forEach(title=>{const node=element('div','signal',title);node.append(element('small','','เป็นสัญญาณเพื่อทบทวน ไม่ใช่คำสั่งซื้อขาย'));$('signals').append(node);});
  $('alert-details').open=false;$('alert-details').hidden=!s.alert;

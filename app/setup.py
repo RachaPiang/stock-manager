@@ -154,7 +154,7 @@ def doctor(settings: Settings, online: bool = False, service: str | None = None)
             continue
         try:
             if name == "stock":
-                symbol = load_watchlist(settings.watchlist_path)[0].symbol
+                symbol = settings.stocks()[0].symbol
                 snapshot = TwelveDataProvider(settings).fetch(symbol, datetime.now(UTC))
                 print(f"stock: ดึง quote/history ของ {symbol} ได้ | วันที่ราคา {snapshot.as_of.isoformat()}")
             elif name == "openai":

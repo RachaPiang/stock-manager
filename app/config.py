@@ -58,6 +58,13 @@ class Settings:
     mock_mode: bool = True
     database_path: Path = ROOT / "data/mock.sqlite3"
     watchlist_path: Path = ROOT / "config/watchlist.json"
+    portfolio_id: str = ""  # Empty selects the private catalog's active portfolio.
+
+    def stocks(self, *, selected: bool = False) -> list[Stock]:
+        from app.portfolio_catalog import PortfolioCatalog
+        if self.mock_mode:
+            return load_watchlist(self.watchlist_path)
+        return PortfolioCatalog(self).stocks(selected=selected)
     price_drop_pct: float = 5.0
     price_rise_pct: float = 8.0
     rsi_low: float = 30.0

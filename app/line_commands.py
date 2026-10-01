@@ -10,6 +10,8 @@ from app.report import report_data
 from app.voice import STYLE, thai_time, answer_text
 
 MENU = ('อยากให้ผมดูเรื่องไหนครับ?\n\n'
+        'พอร์ตทั้งหมด / เลือกพอร์ต 2 — ดูและสลับพอร์ต\n'
+        'งบระบบ — ดูการแบ่งความถี่และโควตา AI\n'
         'วันนี้ — พอร์ตตอนนี้เป็นอย่างไร\n'
         'พอร์ต — มูลค่า กำไร และสัดส่วน\n'
         'แผนลงทุน — ข้อเสนอและเงื่อนไขที่ควรเพิ่ม รอ หรือทบทวน\n'
@@ -30,6 +32,36 @@ def safe_text(value, maximum=4000):
 def command(settings, store, event_id, text, now=None):
     now = now or datetime.now(UTC)
     text = text.strip()
+    from dataclasses import replace
+    from app.portfolio_catalog import PortfolioCatalog
+    from app.portfolio_scope import ScopedStore
+    catalog = PortfolioCatalog(settings)
+    if text == 'พอร์ตทั้งหมด':
+        entries = catalog.read()['portfolios']
+        chosen = catalog.selected()['id']
+        return '\n'.join(['พอร์ตที่บันทึกไว้ครับ']+[f"{'✓ ' if p['id']==chosen else ''}{i}. {p['name']} · {len(p['stocks'])} หุ้น" for i,p in enumerate(entries,1)]+[
+            '', 'เปลี่ยนพอร์ตสำหรับคำสั่ง LINE: พิมพ์ เลือกพอร์ต 2',
+            'เพิ่มพอร์ต/หุ้นและปรับความสำคัญ: เปิด Manage Portfolios.cmd บนเครื่อง',
+            'ทุกพอร์ตยังถูกติดตามพร้อมกัน การเลือกเปลี่ยนเฉพาะหน้าที่กำลังคุยครับ'])
+    if text.startswith('เลือกพอร์ต '):
+        entries = catalog.read()['portfolios']
+        wanted = text.removeprefix('เลือกพอร์ต ').strip()
+        entry = next((p for i,p in enumerate(entries,1) if wanted in {str(i), p['id'], p['name']}), None)
+        if not entry:
+            return 'ไม่พบพอร์ตครับ พิมพ์ พอร์ตทั้งหมด เพื่อดูหมายเลข'
+        catalog.select(entry['id'])
+        return 'เลือก '+entry['name']+' แล้วครับ พิมพ์ พอร์ต เพื่อดูยอดของพอร์ตนี้'
+    settings = replace(settings, portfolio_id=catalog.selected()['id'])
+    store = ScopedStore(store, settings.portfolio_id)
+    if text in {'งบระบบ', 'debug'}:
+        from app.budget_planner import debug_usage
+        p = debug_usage(settings,now)
+        lines = ['งบติดตามที่แบ่งไว้ครับ (ไม่ใช่สัดส่วนเงินลงทุน)',
+                 f"AI ใช้ {p['ai_used']}/{p['ai_limit']} ครั้งวันนี้ UTC · ไม่ใช่ตัวนับโทเค็น",
+                 f"แผนราคาเต็มวันประมาณ {p['planned_credits']}/{p['local_limit']} credits รวมเผื่อประวัติและราคาปิด"]
+        lines += [f"{x['name']} · ความสำคัญ {x['weight_pct']:.1f}% · AI หุ้น {x['ai_slots']} ครั้ง" for x in p['portfolios']]
+        lines += ['', 'หุ้นที่หลายพอร์ตถือใช้ข้อมูลราคาชุดเดียวกัน', 'ดูรายหุ้น/ปรับน้ำหนักได้ใน Manage Portfolios.cmd']
+        return '\n'.join(lines)
     aliases = {'สรุป': 'วันนี้', 'สรุปวันนี้': 'วันนี้', 'หุ้น': 'หุ้นที่ถือ',
                'รีวิว': 'สัปดาห์', 'รายวัน': 'ปิดตลาด', 'รายสัปดาห์': 'สัปดาห์', 'รายเดือน': 'เดือน',
                'อัปเดต': 'อัปเดตพอร์ต', 'อัปเดตแล้ว': 'อัปเดตพอร์ตแล้ว',
@@ -98,10 +130,11 @@ def command(settings, store, event_id, text, now=None):
     if text == 'พอร์ต':
         if not live.get('complete'):
             return 'ราคาหรือจำนวนหุ้นยังไม่ครบ จึงไม่แสดงผลรวมบางส่วนเป็นพอร์ตทั้งหมด'
-        lines = ['มาดูพอร์ตของเรากันครับ', '', f"มูลค่าหุ้นรวม ${live['total_usd']:,.2f}",
-                 f"กำไร/ขาดทุนที่ยังไม่ขาย ${live['gain_usd']:+,.2f} ({live['gain_pct']:+.2f}%)", '', 'สัดส่วนตอนนี้']
+        gain = (f"กำไร/ขาดทุนที่ยังไม่ขาย ${live['gain_usd']:+,.2f} ({live['gain_pct']:+.2f}%)"
+                if live.get('gain_usd') is not None and live.get('gain_pct') is not None else 'กำไร/ขาดทุน: รอยืนยันต้นทุนรวมจากโบรกเกอร์')
+        lines = ['มาดูพอร์ตของเรากันครับ', '', f"มูลค่าหุ้นรวม ${live['total_usd']:,.2f}",gain, '', 'สัดส่วนตอนนี้']
         lines += [f"{h['symbol']} ${h.get('live_value_usd', 0):,.2f} · {h.get('live_weight_pct', 0):.1f}%" for h in portfolio['holdings']]
-        lines += ['', 'ราคาอัปเดตถึง '+thai_time(live['oldest_quote_as_of'])]
+        lines += ['', 'พอร์ต '+catalog.selected()['name'], 'ราคาอัปเดตถึง '+thai_time(live['oldest_quote_as_of'])]
         if live.get('stale'):
             lines.append('ราคาบางตัวยังเก่าครับ กำลังรอรอบอัปเดต')
         if live.get('cost_estimated'):
@@ -126,7 +159,8 @@ def command(settings, store, event_id, text, now=None):
         price = holding.get('live_price')
         lines = [f"{symbol} ของเราครับ", f"ถืออยู่ {holding.get('quantity')} หุ้น", '']
         if price:
-            lines += [f"ราคา ${price:,.2f}", f"กำไร/ขาดทุนเทียบต้นทุน {holding['live_gain_pct']:+.2f}%"]
+            lines += [f"ราคา ${price:,.2f}"]
+            lines.append(f"กำไร/ขาดทุนเทียบต้นทุน {holding['live_gain_pct']:+.2f}%" if holding.get('live_gain_pct') is not None else 'รอยืนยันต้นทุนรวมก่อนคำนวณกำไร')
         else:
             lines.append('ยังไม่มีราคาล่าสุดครับ')
         lines += ['', 'ราคา ณ '+thai_time(holding.get('live_as_of'))]
@@ -137,11 +171,17 @@ def command(settings, store, event_id, text, now=None):
             lines += ['', 'มีจุดที่ควรดูต่อ: '+' / '.join(stock['signals'][:2])]
         lines += ['', f'พิมพ์ ข่าว {symbol} เพื่ออ่านข่าว หรือ ถาม {symbol} ควรจับตาอะไร เพื่อวิเคราะห์ต่อครับ']
         return '\n'.join(lines)
+    watched = next((s for s in report.get('stocks',[]) if s['symbol']==symbol),None)
+    if watched:
+        price = f"${watched['price']:,.2f}" if watched.get('price') is not None else 'ยังไม่มีราคา'
+        return (f"{symbol} · ติดตามอย่างเดียว ยังไม่รวมในยอดพอร์ต\nราคา {price}\n"
+                'ราคา ณ '+thai_time(watched.get('as_of'))+'\n'+('ราคายังเก่าครับ\n' if watched.get('stale') else '')
+                +f'พิมพ์ ข่าว {symbol} เพื่อดูข่าวที่คัดไว้')
     if text.startswith('ข่าว'):
         wanted = text.removeprefix('ข่าว').strip().upper()
         items = [n for n in report['news'] if not wanted or n['symbol'] == wanted][:5]
         if not items:
-            return 'รอบนี้ยังไม่มีข่าวที่คัดไว้ครับ สรุปตลาดและหุ้นทั้ง 9 ตัวจะส่งทุกวันจันทร์ 08:00 น.'
+            return f'รอบนี้ยังไม่มีข่าวที่คัดไว้ครับ สรุปตลาดและหุ้นที่ติดตามจะส่งทุกวันจันทร์ {settings.manager_delivery_hour:02d}:00 น. ไทย และตามเก็บเมื่อเปิดเครื่อง'
         from app.web_news import news_reference
         entries = []
         for item in items:
@@ -206,12 +246,15 @@ def edit_holdings(settings, store, text, now):
     """Explicit, expiring confirmation; broker TOTALS only, no implied trades."""
     if settings.mock_mode:
         return 'โหมดจำลองไม่แก้ยอดพอร์ตจริง'
-    path = settings.database_path.parent/'portfolio-profile.json'
+    from app.portfolio_catalog import PortfolioCatalog
+    path = PortfolioCatalog(settings).profile_path()
     if text.startswith('ยืนยัน '):
         raw = store.get('holding_draft')
         if not raw:
             return 'ไม่มีร่างรอยืนยัน'
         draft = json.loads(raw)
+        if draft.get('portfolio_id', 'main') != PortfolioCatalog(settings).selected()['id']:
+            return 'ร่างนี้เป็นของอีกพอร์ต กรุณากลับไปพอร์ตเดิมหรือสร้างร่างใหม่'
         if now.timestamp() > draft['expires']:
             store.set('holding_draft', '')
             return 'ร่างหมดอายุแล้ว กรุณาสร้างใหม่'
@@ -252,6 +295,7 @@ def edit_holdings(settings, store, text, now):
     changes[symbol] = {'quantity': str(quantity), 'cost_basis_usd': str(cost) if cost is not None else ''}
     code = secrets.token_hex(3).upper()
     store.set('holding_draft', json.dumps({'changes': changes, 'code': code, 'expires': now.timestamp()+600,
+                                         'portfolio_id': PortfolioCatalog(settings).selected()['id'],
                                          'digest': hashlib.sha256(raw.encode()).hexdigest()}))
     cost_line = (f"ต้นทุนรวมใหม่: ${cost} USD (ไม่ใช่มูลค่าตลาด)\n" if cost is not None else
                  'ต้นทุนรวม: ยังไม่ยืนยัน · ระบบจะหยุดใช้ตัวเลขกำไรจนกว่าจะกรอกจาก Dime\n')

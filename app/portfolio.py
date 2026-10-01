@@ -6,13 +6,20 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 
-def load_portfolio(directory: Path) -> dict | None:
-    path = directory / "portfolio-profile.json"
+def load_portfolio(directory: Path, portfolio_id: str = "") -> dict | None:
+    from app.config import Settings
+    from app.portfolio_catalog import PortfolioCatalog
+    catalog = PortfolioCatalog(Settings(database_path=directory/'live.sqlite3', portfolio_id=portfolio_id))
+    path = catalog.profile_path()
     if not path.exists():
         return None
     profile = json.loads(path.read_text(encoding="utf-8"))
+    if not profile.get('holdings'):
+        return None
     validate_portfolio(profile)
-    profile['quantity_as_of'] = quantity_effective_at(profile, directory)
+    profile['quantity_as_of'] = quantity_effective_at(profile, path.parent)
+    profile['portfolio_id'] = catalog.selected()['id']
+    profile['portfolio_name'] = catalog.selected()['name']
     return profile
 
 
@@ -39,11 +46,14 @@ def quantity_effective_at(profile, directory):
 def validate_portfolio(profile: dict) -> dict:
     """Validate user data and attach calculated fields to a report-only copy."""
     total = Decimal("0")
+    snapshot_complete = True
     seen = set()
     for row in profile["holdings"]:
-        value, gain = Decimal(str(row["value_usd"])), Decimal(str(row["gain_pct"]))
+        missing_snapshot = row.get('snapshot_unavailable') is True
+        snapshot_complete = snapshot_complete and not missing_snapshot
+        value, gain = (Decimal('0'), Decimal('0')) if missing_snapshot else (Decimal(str(row["value_usd"])), Decimal(str(row["gain_pct"])))
         quantity = row.get("quantity")
-        if (not value.is_finite() or value <= 0 or not gain.is_finite()
+        if (not value.is_finite() or (value <= 0 and not missing_snapshot) or not gain.is_finite()
                 or gain <= -100 or row["symbol"] in seen
                 or quantity is not None and (not Decimal(str(quantity)).is_finite() or Decimal(str(quantity)) <= 0)):
             raise ValueError("Invalid portfolio snapshot")
@@ -62,25 +72,28 @@ def validate_portfolio(profile: dict) -> dict:
         row["estimated_cost_usd"] = float(cost.quantize(Decimal(".01"), rounding=ROUND_HALF_UP))
         if row['estimated_cost_usd'] <= 0:
             raise ValueError('Cost basis must be at least one cent')
-        row["estimated_gain_usd"] = float((value-cost).quantize(Decimal(".01"), rounding=ROUND_HALF_UP))
+        row["estimated_gain_usd"] = None if missing_snapshot else float((value-cost).quantize(Decimal(".01"), rounding=ROUND_HALF_UP))
     if not seen:
         raise ValueError("Empty portfolio snapshot")
-    profile["total_usd"] = float(total)
+    profile["total_usd"] = float(total) if snapshot_complete else None
     profile["estimated_cost_total_usd"] = float(sum(Decimal(str(row["estimated_cost_usd"])) for row in profile["holdings"]))
-    profile["estimated_gain_total_usd"] = float(total - Decimal(str(profile["estimated_cost_total_usd"])))
-    profile["estimated_gain_pct"] = float((total / Decimal(str(profile["estimated_cost_total_usd"])) - 1) * 100)
+    profile["estimated_gain_total_usd"] = float(total - Decimal(str(profile["estimated_cost_total_usd"]))) if snapshot_complete else None
+    profile["estimated_gain_pct"] = float((total / Decimal(str(profile["estimated_cost_total_usd"])) - 1) * 100) if snapshot_complete else None
     for row in profile["holdings"]:
-        row["weight_pct"] = float(Decimal(str(row["value_usd"])) / total * 100)
+        row["weight_pct"] = float(Decimal(str(row["value_usd"])) / total * 100) if snapshot_complete else None
     profile["allocations"] = {
-        "sectors": _group_allocations(profile["holdings"], "sector", total),
-        "exposures": _group_allocations(profile["holdings"], "exposure", total),
+        "sectors": _group_allocations(profile["holdings"], "sector", total) if snapshot_complete else [],
+        "exposures": _group_allocations(profile["holdings"], "exposure", total) if snapshot_complete else [],
     }
     return profile
 
 
 def holdings_version(profile: dict) -> str:
     basis = sorted((h['symbol'], h.get('quantity'), h['estimated_cost_usd']) for h in profile['holdings'])
-    return hashlib.sha256(json.dumps([profile.get('holdings_as_of', profile.get('as_of')), basis], sort_keys=True).encode()).hexdigest()
+    key = [profile.get('holdings_as_of', profile.get('as_of')), basis]
+    if profile.get('portfolio_id', 'main') != 'main':
+        key.append(profile['portfolio_id'])
+    return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
 
 def _group_allocations(holdings: list[dict], field: str, total: Decimal) -> list[dict]:

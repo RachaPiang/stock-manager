@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import tempfile
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -47,11 +48,18 @@ def report_data(settings: Settings, now: datetime | None = None) -> dict:
     result["ai"] = {"attempts_today": 0, "daily_limit": settings.ai_max_calls_per_day,
                     "stock_limit": settings.ai_max_calls_per_stock_per_day}
     from app.portfolio import attach_live_valuation, load_portfolio, portfolio_history, holdings_version
-    result["portfolio"] = None if settings.mock_mode else load_portfolio(settings.database_path.parent)
+    result["portfolio"] = None if settings.mock_mode else load_portfolio(settings.database_path.parent, settings.portfolio_id)
+    from app.portfolio_catalog import PortfolioCatalog
+    from app.budget_planner import debug_usage
+    catalog = PortfolioCatalog(settings)
+    result['portfolio_info'] = catalog.selected()
+    result['portfolio_catalog'] = [dict(id=p['id'], name=p['name'], active=p['id']==catalog.read()['active_id'],
+        url=settings.database_path.stem+'-portfolio-'+p['id']+'.html') for p in catalog.read()['portfolios']]
+    result['budget_plan'] = debug_usage(settings, now)
     result["news"], result["portfolio_review"], result["portfolio_history"] = [], None, []
     result['portfolio_intraday'] = []
     result['portfolio_observations'] = []
-    result["market"] = {"open": is_open(now), "interval_minutes": 5, "expected_full_day": 711,
+    result["market"] = {"open": is_open(now), "interval_minutes": 5, "expected_full_day": result['budget_plan']['planned_credits'],
                         "limit": DAILY_LIMIT, "used": 0, "utc_day": now.astimezone(UTC).date().isoformat()}
     usage_path = settings.database_path.parent / "market-api.sqlite3"
     if usage_path.exists() and not settings.mock_mode:
@@ -85,18 +93,23 @@ def report_data(settings: Settings, now: datetime | None = None) -> dict:
                 result['news'] = [n for n in result['news'] if not n['source_id'].startswith('web:') or significant(n['title'])]
             if "portfolio_reviews" in tables:
                 review = connection.execute("""SELECT period,created_at,message,source_count,ai_used
-                    FROM portfolio_reviews ORDER BY created_at DESC LIMIT 1""").fetchone()
+                    FROM portfolio_reviews WHERE period LIKE ? ORDER BY created_at DESC LIMIT 1""",
+                    ('%:portfolio:'+result['portfolio_info']['id'] if result['portfolio_info']['id']!='main' else '____-W__',)).fetchone()
                 result["portfolio_review"] = dict(review) if review else None
             if 'portfolio_observations' in tables and result['portfolio']:
                 result['portfolio_observations'] = [dict(r) for r in connection.execute(
                     'SELECT at AS day, value_usd, cost_usd FROM portfolio_observations WHERE basis=? ORDER BY at',
                     (holdings_version(result['portfolio']),))]
-        for stock in load_watchlist(settings.watchlist_path):
-            item = {"symbol": stock.symbol, "name": NAMES.get(stock.symbol, stock.symbol), "bars": [],
+        for stock in settings.stocks(selected=True):
+            name = next((s.get('name') for s in result['portfolio_info']['stocks'] if s['symbol']==stock.symbol), None)
+            item = {"symbol": stock.symbol, "name": name or NAMES.get(stock.symbol, stock.symbol), "bars": [],
                     "intraday": [], "intraday_previous": {}, "price_kind": "quote",
                     "price": None, "as_of": None, "previous_close": None, "indicators": None, "signals": [],
                     "stale": True, "note": "ยังไม่มีข้อมูล · เปิด Open Portfolio.cmd เพื่อตรวจหุ้น",
                     "target_price": stock.target_price, "alert": None, "source": source}
+            from app.fundamentals import CIKS
+            item['research_coverage'] = dict(sec='supported' if stock.symbol in CIKS else 'unsupported',
+                news='company_headlines' if stock.symbol in NAMES else 'ticker_headlines_only')
             result["stocks"].append(item)
             if not connection:
                 continue
@@ -167,14 +180,20 @@ def report_data(settings: Settings, now: datetime | None = None) -> dict:
     finally:
         if connection:
             connection.close()
+    symbols = {s['symbol'] for s in result['stocks']}
+    result['news'] = [n for n in result['news'] if n['symbol'] in symbols or n['symbol']=='MARKET']
     from app.benchmark import report_comparison
     result['benchmark'] = report_comparison(settings, result['portfolio_history'])
     return result
 
 
-def write_report(settings: Settings, now: datetime | None = None) -> Path:
+def write_report(settings: Settings, now: datetime | None = None, *, _single=False) -> Path:
+    if not _single and not settings.mock_mode:
+        from app.portfolio_catalog import PortfolioCatalog
+        for p in PortfolioCatalog(settings).read()['portfolios']:
+            write_report(replace(settings, portfolio_id=p['id']), now, _single=True)
     data = report_data(settings, now)
-    if data.get('portfolio') and not settings.mock_mode:
+    if data.get('portfolio') and not settings.mock_mode and settings.database_path.exists():
         from app.portfolio_tracking import record_observations
         data['portfolio_observations'] = record_observations(settings.database_path, data)
     payload = json.dumps(data, ensure_ascii=False, allow_nan=False)
@@ -183,7 +202,8 @@ def write_report(settings: Settings, now: datetime | None = None) -> Path:
     payload = payload.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     template = (ROOT / "app/templates/portfolio.html").read_text(encoding="utf-8")
     template = template.replace('__PORTFOLIO_DASHBOARD_JS__', (ROOT / 'app/templates/portfolio-dashboard.js').read_text(encoding='utf-8'))
-    output = settings.database_path.parent / (settings.database_path.stem + "-portfolio.html")
+    suffix = ('-'+data['portfolio_info']['id']) if _single else ''
+    output = settings.database_path.parent / (settings.database_path.stem + "-portfolio"+suffix+".html")
     output.parent.mkdir(parents=True, exist_ok=True)
     # A browser must see the previous complete report or the next complete report.
     temporary = None

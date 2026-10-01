@@ -19,7 +19,9 @@ def sync_close(settings, now=None, provider=None):
     with run_lock(settings.database_path.with_suffix('.lock')):
         db = Database(settings.database_path, 'live')
         try:
-            for stock in load_watchlist(settings.watchlist_path):
+            from app.portfolio_catalog import PortfolioCatalog
+            weights = PortfolioCatalog(settings).weights()[1]
+            for stock in sorted(settings.stocks(), key=lambda s:(-weights.get(s.symbol,0),s.symbol)):
                 key = f'close-sync:{target}:{stock.symbol}'
                 row = db.connection.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()
                 state = json.loads(row[0]) if row else {}

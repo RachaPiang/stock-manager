@@ -26,6 +26,10 @@ def evidence_text(payload: dict) -> str:
              f"ตัวชี้วัดจากแท่งรายวันที่ปิดแล้วถึง {payload['indicators_as_of']}"]
     if values["target_gap_pct"] is not None:
         lines.append(f"เทียบราคาเป้าหมาย {values['target_gap_pct']:+.2f}% (ราคา/เป้าหมาย - 1)")
+    if payload.get('affected_portfolios'):
+        lines.append('พอร์ตที่ถือหุ้นนี้: '+' / '.join(p['name'] for p in payload['affected_portfolios']))
+    elif payload.get('tracked_in'):
+        lines.append('พอร์ตที่ติดตามหุ้นนี้: '+' / '.join(payload['tracked_in']))
     context = payload.get('decision_context', {})
     holding = next((h for h in context.get('holdings', []) if h['symbol']==payload['symbol']),None)
     if holding and holding.get('live_day_change_usd') is not None:
@@ -61,6 +65,7 @@ class TemplateAnalyst(Analyst):
 
 # Keep data checks internal; only material gaps need to appear in the reply.
 INSTRUCTIONS = STYLE + ('\nใช้เหตุการณ์และตัวเลขที่คำนวณไว้แล้ว ไม่คำนวณซ้ำ ถ้าไม่มีข่าวแนบ อย่าเดาสาเหตุราคา '
+    'affected_portfolios คือพอร์ตแยกกัน ห้ามรวมจำนวนหุ้นหรืองบ DCA ข้ามพอร์ต '
     'ใช้ decision_context เชื่อมผลต่อพอร์ต เหตุผลถือ ข่าว และงบรายปีที่มี พร้อมชื่อแหล่งและวันที่ '
     'RSS อาจมีแค่หัวข่าว ห้ามเดาสาเหตุการขึ้นลง งบรายปีไม่ใช่มูลค่าเหมาะสมปัจจุบัน '
     'ราคาและน้ำหนักอาจต่างเวลากัน ห้ามเสนอวงเงินลงทุนเพิ่มเมื่อไม่ได้ยืนยันงบ แนะนำเงื่อนไขเพิ่ม รอ หรือทบทวนได้')
@@ -109,6 +114,8 @@ class GeminiAnalyst(Analyst):
                 data.pop("decision_context", None)
                 data.pop("portfolio_context", None)
                 data.pop("investor_profile", None)
+                data.pop("affected_portfolios", None)
+                data.pop("tracked_in", None)
             prompt = (INSTRUCTIONS + "\nสรุปเป็นภาษาไทย ใช้เฉพาะข้อมูลที่ให้มา ไม่สั่งซื้อขาย และแยกเหตุการณ์ หลักฐาน "
                       "สิ่งที่ควรตรวจเพิ่ม ความเสี่ยง และทางเลือกแบบมีเงื่อนไข:\n"
                       + json.dumps(data, ensure_ascii=False, allow_nan=False))

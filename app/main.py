@@ -55,8 +55,9 @@ def deliver_pending(db: Database, analyst: Analyst, notifier: Notifier, now: dat
         if message is None:
             payload = json.loads(row["payload"])
             try:
+                from app.budget_planner import ai_stock_limit
                 if analyst.uses_ai and not db.reserve_ai(row["id"], payload["symbol"], now,
-                        settings.ai_max_calls_per_day, settings.ai_max_calls_per_stock_per_day):
+                        settings.ai_max_calls_per_day, ai_stock_limit(settings, payload['symbol'], now)):
                     message = TemplateAnalyst().summarize(payload) + "\nหมายเหตุ: ใช้แม่แบบเพื่อจำกัดการเรียก AI หรือเพราะเหตุการณ์นี้เคยจองการเรียกแล้ว"
                 else:
                     message = analyst.summarize(payload)
@@ -92,7 +93,7 @@ def deliver_pending(db: Database, analyst: Analyst, notifier: Notifier, now: dat
 def check(settings: Settings, provider: StockProvider, analyst: Analyst, notifier: Notifier,
           now: datetime | None = None, scheduled: bool = False) -> dict:
     now = now or datetime.now(UTC)
-    stocks = load_watchlist(settings.watchlist_path)
+    stocks = settings.stocks()
     checked = queued = sent = errors = 0
     with run_lock(settings.database_path.with_suffix(".lock")):
         if scheduled:
@@ -104,6 +105,12 @@ def check(settings: Settings, provider: StockProvider, analyst: Analyst, notifie
             if not MarketState(settings.database_path.parent / "market-api.sqlite3").claim_slot(now):
                 log.info("Scheduled check skipped: this five-minute slot already ran")
                 return dict(checked=0, queued=0, sent=0, errors=0)
+            from app.budget_planner import due_symbols
+            due = due_symbols(settings, now)
+            stocks = [s for s in stocks if s.symbol in due]
+            from app.portfolio_catalog import PortfolioCatalog
+            weights = PortfolioCatalog(settings).weights()[1]
+            stocks.sort(key=lambda s:(-weights.get(s.symbol,0),s.symbol))
         db = Database(settings.database_path, "mock" if settings.mock_mode else "live")
         run_id = db.start_run(now)
         try:
@@ -129,15 +136,31 @@ def check(settings: Settings, provider: StockProvider, analyst: Analyst, notifie
                             payload['caught_up_close'] = snapshot.session_date.isoformat()
                         if not settings.mock_mode:
                             from app.portfolio import load_portfolio, analyst_context
-                            profile = load_portfolio(settings.database_path.parent)
+                            profile = load_portfolio(settings.database_path.parent, settings.portfolio_id)
                             if profile:
                                 payload["portfolio_context"] = analyst_context(profile, stock.symbol,
                                     dict(price=snapshot.price, as_of=snapshot.as_of.isoformat(),
                                          previous_close=snapshot.previous_close, stale=False, price_kind=snapshot.price_kind))
+                            from app.portfolio_catalog import PortfolioCatalog
+                            catalog = PortfolioCatalog(settings)
+                            affected = []
+                            for entry in catalog.read()['portfolios']:
+                                p = load_portfolio(settings.database_path.parent, entry['id'])
+                                if p and any(h['symbol'] == stock.symbol for h in p['holdings']):
+                                    affected.append(dict(name=entry['name'], id=entry['id'],
+                                        context=analyst_context(p, stock.symbol, dict(price=snapshot.price,
+                                            as_of=snapshot.as_of.isoformat(), previous_close=snapshot.previous_close,
+                                            stale=False, price_kind=snapshot.price_kind))))
+                            payload['affected_portfolios'] = affected
+                            watched = [e for e in catalog.read()['portfolios'] if stock.symbol in {s['symbol'] for s in e['stocks']}]
+                            payload['tracked_in'] = [e['name'] for e in watched]
                             try:
                                 from app.report import report_data
                                 from app.research_context import context
-                                payload['decision_context'] = context(settings,report_data(settings,now),{stock.symbol},now)
+                                from dataclasses import replace
+                                chosen = affected[0]['id'] if affected else watched[0]['id'] if watched else settings.portfolio_id
+                                evidence_settings = replace(settings,portfolio_id=chosen)
+                                payload['decision_context'] = context(evidence_settings,report_data(evidence_settings,now),{stock.symbol},now)
                                 payload['portfolio_context_available'] = bool(profile)
                             except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
                                 log.warning('%s | saved research unavailable; using price evidence only',stock.symbol)
@@ -178,7 +201,7 @@ def sync_news(settings: Settings, now: datetime | None = None) -> dict:
                 return {"saved": 0, "errors": 0, "skipped": True}
             provider = TwelveDataPressReleaseProvider(settings)
             saved = errors = 0
-            for stock in load_watchlist(settings.watchlist_path):
+            for stock in settings.stocks():
                 try:
                     saved += db.save_news(provider.fetch(stock.symbol, now), now)
                 except NewsError:
@@ -202,7 +225,9 @@ def run_portfolio_review(settings: Settings, now: datetime | None = None) -> dic
     profile = overview["portfolio"]
     if not profile:
         raise ValueError("Portfolio review requires data/portfolio-profile.json")
-    period = period_key(now)
+    from app.portfolio_catalog import PortfolioCatalog
+    identity = PortfolioCatalog(settings).selected()['id']
+    period = period_key(now)+((':portfolio:'+identity) if identity != 'main' else '')
     with run_lock(settings.database_path.with_suffix(".lock")):
         db = Database(settings.database_path, "live")
         try:
@@ -267,7 +292,7 @@ def main() -> int:
             with run_lock(settings.database_path.with_suffix(".lock")):
                 db = Database(settings.database_path, "live")
                 try:
-                    for stock in load_watchlist(settings.watchlist_path):
+                    for stock in settings.stocks():
                         try:
                             if args.command == "refresh-intraday":
                                 bars5 = provider.fetch_intraday(stock.symbol, datetime.now(UTC))

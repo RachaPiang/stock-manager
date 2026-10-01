@@ -18,7 +18,7 @@ def append_reconciliation(profile_path: Path, before: dict, after: dict, now: da
     changes = []
     old = {row['symbol']: row for row in before['holdings']}
     for row in after['holdings']:
-        previous = old[row['symbol']]
+        previous = old.get(row['symbol'], {})
         old_values = {'quantity': previous.get('quantity'), 'cost_basis_usd': previous.get('cost_basis_usd'),
                       'cost_basis_pending': previous.get('cost_basis_pending', False)}
         new_values = {'quantity': row.get('quantity'), 'cost_basis_usd': row.get('cost_basis_usd'),

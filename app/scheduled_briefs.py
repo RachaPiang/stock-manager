@@ -50,7 +50,8 @@ def interpret(settings, key, payload, now, instruction, *, private=False):
         return None
     db = Database(settings.database_path, 'live')
     try:
-        allowed = db.reserve_ai('brief:'+key, '__brief__', now,
+        suffix = ':portfolio:'+settings.portfolio_id if settings.portfolio_id not in {'','main'} and not key.startswith('web-week:') else ''
+        allowed = db.reserve_ai('brief:'+key+suffix, '__brief__', now,
                                 settings.ai_max_calls_per_day, settings.ai_max_calls_per_day)
     finally:
         db.close()
@@ -72,7 +73,7 @@ def build_news_brief(settings, coverage, key, now):
                    for s, f in compact.items()}
     answer = interpret(settings, key, prompt_data, now,
         'สรุปข่าวรับสัปดาห์ใหม่ check_more=ภาพตลาด, risks=รายการข่าวหุ้นทุกตัว '
-        'META GOOGL ETN NVDA MSFT TXN ASML AMZN V ตัวละหนึ่งบรรทัด, options=ประเด็นติดตามสัปดาห์นี้ '
+        + ' '.join(s for s in compact if s != 'MARKET')+' ตัวละหนึ่งบรรทัด, options=ประเด็นติดตามสัปดาห์นี้ '
         'ใช้หัวข่าวที่ให้เท่านั้น ไม่แต่งรายละเอียดบทความ ถ้าไม่มีข่าวบอกตามสถานะ '
         'อย่าคัดลอก URL เพราะโค้ดจะแนบแหล่งให้เอง แปลไทยกระชับรวมไม่เกิน 1800 ตัวอักษร') if any(f['items'] for f in compact.values()) else None
     all_stocks_present = bool(answer) and all(re.search(r'\b'+re.escape(s)+r'\b', answer['risks']) for s in compact if s != 'MARKET')
@@ -91,6 +92,17 @@ def build_news_brief(settings, coverage, key, now):
 
 
 def run_due(settings, store, now=None):
+    from dataclasses import replace
+    from app.portfolio_catalog import PortfolioCatalog
+    from app.portfolio_scope import ScopedStore
+    from app.portfolio import load_portfolio
+    for p in sorted(PortfolioCatalog(settings).read()['portfolios'], key=lambda p:-p['priority']):
+        if p['id'] != 'main' and not load_portfolio(settings.database_path.parent, p['id']):
+            continue
+        _run_due_single(replace(settings,portfolio_id=p['id']),ScopedStore(store,p['id']),now)
+
+
+def _run_due_single(settings, store, now=None):
     now = now or datetime.now(UTC)
     if settings.mock_mode or store.get('paused') == '1':
         return
@@ -124,7 +136,7 @@ def run_due(settings, store, now=None):
                 signals = check_close_signals(settings, now)
             except AlreadyRunning:
                 signals = None
-            if signals and signals['checked'] == len(load_watchlist(settings.watchlist_path)) and not signals['errors']:
+            if signals and signals['checked'] == len(settings.stocks()) and not signals['errors']:
                 store.set('close-signals-through', target.isoformat())
     if missing:
         from app.report import report_data
@@ -140,6 +152,8 @@ def run_due(settings, store, now=None):
                 if now < datetime.fromisoformat(first_try)+timedelta(hours=2):
                     continue
             message = render_period(numbers, period['kind'])
+            if len(report.get('portfolio_catalog', [])) > 1:
+                message = 'พอร์ต '+report['portfolio_info']['name']+'\n\n'+message
             if now.astimezone(BANGKOK).date() > period['ready'].astimezone(BANGKOK).date():
                 message = 'ตามเก็บสรุปที่ยังไม่ได้ส่งครับ\n\n'+message
             answer = None

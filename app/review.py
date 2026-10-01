@@ -35,7 +35,7 @@ def review_payload(portfolio: dict, news: list[dict]) -> dict:
                       'snapshot_gain_pct': h['gain_pct'], 'latest_saved_gain_pct': h.get('live_gain_pct'),
                       'latest_saved_gain_usd': h.get('live_gain_usd'), 'price_as_of': h.get('live_as_of'),
                       'price_stale': h.get('live_stale', True), 'cost_source': h.get('cost_source'),
-                      "thesis": h["thesis"]} for h in portfolio["holdings"]],
+                      "thesis": h.get("thesis", "ยังไม่ได้ระบุเหตุผลที่ถือ")} for h in portfolio["holdings"]],
         "important_news": [{"symbol": item["symbol"], "published_at": item["published_at"],
                             "title": item["title"], "reason": item["reason"],
                             "source_name": item["source_name"], "excerpt": item.get('excerpt', '')[:400]}

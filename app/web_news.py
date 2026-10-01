@@ -62,7 +62,7 @@ def parse(content, symbol, now, limit=2):
         title = plain_text(item.findtext('title'), 350)
         if not significant(title):
             continue
-        if symbol != 'MARKET' and not any(re.search(r'\b'+re.escape(a)+r'\b', title, re.I) for a in ALIASES[symbol]):
+        if symbol != 'MARKET' and not any(re.search(r'\b'+re.escape(a)+r'\b', title, re.I) for a in ALIASES.get(symbol, (symbol,))):
             continue
         link = item.findtext('link', '').strip()
         url = urlparse(link)
@@ -85,7 +85,12 @@ def parse(content, symbol, now, limit=2):
 
 def collect(settings, now, topics=None, monitor=False):
     """Each topic succeeds once per ISO week, or retries at most twice six hours apart."""
-    topics = topics or TOPICS
+    if topics is None:
+        topics = {'MARKET': TOPICS['MARKET']}
+        for stock in settings.stocks():
+            symbol = stock.symbol
+            # Unknown companies require ticker mention; no guessed issuer identity.
+            topics[symbol] = TOPICS.get(symbol, '"'+symbol+'" (stock OR earnings OR revenue)')
     path = settings.database_path.parent/'web-news.sqlite3'
     week = now.astimezone(ZoneInfo('Asia/Bangkok')).strftime('%G-W%V')+':filter2'
     if monitor:

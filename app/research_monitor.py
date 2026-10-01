@@ -110,7 +110,7 @@ def run_due(settings,store,now=None):
         from app.config import load_watchlist
         from app.database import Database
         from app.news import NewsItem
-        symbols=[s.symbol for s in load_watchlist(settings.watchlist_path)]
+        symbols=[s.symbol for s in settings.stocks()]
         statuses={}
         for label,fetch in [('news',lambda:news_collect(settings,now,monitor=True)),
                             ('filings',lambda:filing_collect(settings,symbols,now))]:

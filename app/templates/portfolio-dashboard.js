@@ -1,5 +1,17 @@
 // Presentation only. All portfolio money calculations come from Python.
 const portfolio=data.portfolio;
+const portfolioCatalog=data.portfolio_catalog||[];
+$('portfolio-picker').replaceChildren();
+for(const p of portfolioCatalog){const option=element('option','',p.name+(p.active?' · LINE':''));option.value=p.id;$('portfolio-picker').append(option);}
+if(data.portfolio_info){$('portfolio-picker').value=data.portfolio_info.id;$('portfolio-name').textContent=data.portfolio_info.name;}
+$('portfolio-picker').disabled=data.mock||portfolioCatalog.length<2;
+$('portfolio-picker').onchange=()=>{const p=portfolioCatalog.find(p=>p.id===$('portfolio-picker').value);if(p&&/^[a-zA-Z0-9_-]+\.html$/.test(p.url))globalThis.location?.assign(p.url);};
+$('portfolio-settings-button').onclick=()=>{$('manage-portfolio').open=true;$('budget-debug').open=true;$('manage-portfolio').scrollIntoView?.({behavior:'smooth',block:'start'});};
+const budgetPlan=data.budget_plan;
+if(budgetPlan){
+ $('budget-summary').textContent=`แผน ${budgetPlan.price_budget} รอบราคา + เผื่อประวัติ/ปิดตลาด ${budgetPlan.overhead_reserve} = ${budgetPlan.planned_credits}/${budgetPlan.local_limit} credits ต่อวันเต็ม · ใช้จริง ${data.market?.used??0} วันนี้ UTC · AI ใช้ ${budgetPlan.ai_used}/${budgetPlan.ai_limit} ครั้ง · กันไว้สำหรับรีวิว/ข่าว/ถาม ${budgetPlan.ai_reserve} ครั้ง`;
+ for(const s of budgetPlan.stocks){const row=element('tr');for(const value of [s.symbol,s.weight_pct.toFixed(1)+'%',s.price_checks,s.average_minutes+' นาที',s.ai_slots+' / '+s.ai_used])row.append(element('td','',value));$('budget-rows').append(row);}
+}
 const dollars=v=>v==null?'—':'$'+number(v);
 const signedMoney=v=>v==null?'—':(v>=0?'+':'−')+'$'+number(Math.abs(v));
 const savedControls=['portfolio-series','portfolio-range','allocation-view','holdings-sort'];
@@ -87,7 +99,7 @@ function renderPortfolioChart(){
 }
 function renderPortfolioOverview(){
  const live=portfolio?.live;
- if(!portfolio){$('portfolio-quality').textContent=data.mock?'โหมดทดลอง · ยังไม่นำจำนวนหุ้นจริงมารวมกับราคาจำลอง':'ยังไม่มีข้อมูลจำนวนหุ้น';renderPortfolioChart();return;}
+ if(!portfolio){$('portfolio-quality').textContent=data.mock?'โหมดทดลอง · ยังไม่นำจำนวนหุ้นจริงมารวมกับราคาจำลอง':'พอร์ตนี้ยังไม่มีหุ้นที่ถือ · เพิ่มหุ้นได้ใน Manage Portfolios.cmd (หุ้นติดตามอย่างเดียวไม่รวมยอดเงิน)';renderPortfolioChart();return;}
  $('portfolio-total').textContent=live?.complete?dollars(live.total_usd):'—';
  $('portfolio-cost').textContent=live?.cost_complete===false?'รอยืนยัน':dollars(portfolio.estimated_cost_total_usd);
  $('portfolio-gain').textContent=live?.complete?signedMoney(live.gain_usd):'—';
@@ -98,8 +110,8 @@ function renderPortfolioOverview(){
  $('portfolio-cost-note').textContent=live?.cost_complete===false?'มีการเปลี่ยนยอดหุ้นแต่ยังไม่ยืนยันต้นทุนรวม · มูลค่าตลาดยังอัปเดตตามปกติ':live?.cost_estimated?'ต้นทุนเริ่มต้นคำนวณจากกำไร % ที่เคยแจ้ง · กรอกจาก Dime แล้วจะแม่นขึ้น':'ต้นทุนที่คุณบันทึกจากโบรกเกอร์';
  $('portfolio-quality').textContent=live?.complete?'ราคาครบ '+portfolio.holdings.length+' หุ้น · '+stamp(live.oldest_quote_as_of)+(live.mixed_times?' ถึง '+stamp(live.newest_quote_as_of)+' · เวลาของแต่ละหุ้นต่างกัน':'')+(live.stale?' · มีข้อมูลเก่า ควรตรวจรอบอัปเดต':''):(live?.reason||'รอราคาครบทุกหุ้น')+' · ภาพพอร์ตเดิม '+dollars(portfolio.total_usd)+' ณ '+day(portfolio.as_of);
  $('portfolio-quality').className='portfolio-quality'+(!live?.complete||live.stale?' warning':'');
- $('portfolio-dca').textContent='ออมเดือนละ '+number(portfolio.dca.monthly_total)+' บาท';
- $('portfolio-dca-detail').textContent='วันที่ '+portfolio.dca.day+' · ตัวละ '+number(portfolio.dca.per_stock)+' บาท · '+portfolio.holdings.length+' หุ้น';
+ $('portfolio-dca').textContent=portfolio.dca.enabled===false?'ยังไม่เปิดแผน DCA':'ออมเดือนละ '+number(portfolio.dca.monthly_total)+' บาท';
+ $('portfolio-dca-detail').textContent=portfolio.dca.enabled===false?'ตั้งได้ใน Manage Portfolios.cmd':'วันที่ '+portfolio.dca.day+' · ตัวละ '+number(portfolio.dca.per_stock)+' บาท · แผนที่บันทึก (เพิ่มหุ้นไม่ปรับ DCA เอง)';
  const checks=[['จำนวนหุ้น',portfolio.holdings.filter(h=>h.quantity!=null).length+' / '+portfolio.holdings.length+' ตัว'],['ต้นทุนจากโบรกเกอร์',portfolio.holdings.filter(h=>h.cost_source==='user_reported').length+' / '+portfolio.holdings.length+' ตัว'],['เชื่อมรายการ DCA อัตโนมัติ','ยังไม่เชื่อม · บันทึกยอดหลังซื้อ'],['รายงานกับราคา','เปิดหน้านี้ไม่ดึงราคาเพิ่ม · รอรอบตรวจแล้วโหลดหน้าใหม่']];
  $('portfolio-checks').replaceChildren();for(const [label,value] of checks){const row=element('div');row.append(element('span','',label),element('span','',value));$('portfolio-checks').append(row);}
  renderHoldings();renderPortfolioChart();
