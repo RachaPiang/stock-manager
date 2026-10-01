@@ -27,10 +27,11 @@ foreach ($launcher in $launchers) {
 
 # Match exact Python path plus a known Stock Manager module before terminating.
 $pythonPath = [IO.Path]::GetFullPath((Join-Path $projectRoot '.venv\Scripts\pythonw.exe'))
+. (Join-Path $PSScriptRoot 'project_python.ps1')
 try {
     $workers = Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe'" -ErrorAction Stop |
         Where-Object {
-            $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $pythonPath -and
+            (Test-ProjectPython $_ $pythonPath) -and
             $_.CommandLine -match '\s-m\s+app\.(line_webhook|market_daemon|main\s+check)(?:\s|$)'
         }
     foreach ($worker in $workers) {
