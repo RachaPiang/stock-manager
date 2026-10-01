@@ -91,6 +91,7 @@ class Desktop:
             ('เปิดกราฟพอร์ต', lambda: self.job('เปิดกราฟจากข้อมูลที่บันทึก', ['report'], open_report=True)),
             ('จัดการพอร์ต / หุ้น / DCA', lambda: self.window('app.portfolio_manager')),
             ('อัปเดตจำนวนหุ้นและต้นทุน', lambda: self.window('app.portfolio_editor')),
+            ('คำอธิบายพอร์ตและหุ้นสำหรับ AI', lambda: self.window('app.notes_editor')),
         ])
         ttk.Label(home, text='กราฟเปิดในเบราว์เซอร์เดิม ส่วนการแก้พอร์ตเปิดเป็นหน้าต่างแบบเดิม', wraplength=820).pack(anchor='w', pady=(0, 16))
         ttk.Label(home, text='ระบบเบื้องหลัง', style='Section.TLabel').pack(anchor='w')

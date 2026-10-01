@@ -10,6 +10,7 @@ from app.database import Database, AlreadyRunning
 from app.config import load_watchlist
 from app.period_reports import due_periods, period_numbers, render_period
 from app.voice import STYLE, answer_text
+from app.investment_notes import CONTEXT_GUIDANCE
 
 log = logging.getLogger(__name__)
 BANGKOK = ZoneInfo('Asia/Bangkok')
@@ -26,7 +27,7 @@ def portfolio_review(settings, report, numbers, key, now):
         log.warning('Saved review evidence unavailable; using period numbers only')
         payload['context_unavailable'] = True
     answer = interpret(settings, key, for_model(payload), now,
-        'รีวิวพอร์ตระยะยาวตามรอบอัตโนมัติ ไม่ทวนตารางราคา '
+        'รีวิวพอร์ตตามแผนและระยะเวลาถือของเจ้าของตามรอบอัตโนมัติ ไม่ทวนตารางราคา '
         'check_more=ภาพรวมและสิ่งที่ควรทำตอนนี้ risks=ความเสี่ยงสำคัญต่อพอร์ต '
         'options=เงื่อนไขสำหรับถือ/DCA ต่อ รอดู หรือทบทวนแผน โดยยังไม่เปลี่ยนแผนเอง '
         'ใช้ข่าวและงบที่แนบโดยระบุแหล่งและวันที่เมื่ออ้างอิง ห้ามเดาสาเหตุราคา '
@@ -59,7 +60,7 @@ def interpret(settings, key, payload, now, instruction, *, private=False):
         return None
     try:
         from app.ai_client import analyze
-        return analyze(settings, STYLE+'\n'+instruction+'\n'+json.dumps(payload, ensure_ascii=False, allow_nan=False))
+        return analyze(settings, STYLE+CONTEXT_GUIDANCE+'\n'+instruction+'\n'+json.dumps(payload, ensure_ascii=False, allow_nan=False))
     except Exception:
         log.warning('Brief AI unavailable; saved numeric/source-based fallback')
         return None

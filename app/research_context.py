@@ -53,7 +53,7 @@ def context(settings, report, symbols, now):
         if h['symbol'] not in symbols and 'MARKET' not in symbols:
             continue
         holdings.append({k: h.get(k) for k in ('symbol','quantity','live_weight_pct','live_value_usd',
-            'live_gain_pct','live_day_change_usd','live_as_of','live_stale','thesis','cost_source')})
+            'live_gain_pct','live_day_change_usd','live_as_of','live_stale','thesis','cost_source','investment_notes')})
     news = []
     for item in report.get('news', []):
         try:
@@ -63,6 +63,10 @@ def context(settings, report, symbols, now):
         except (ValueError, TypeError):
             continue
     return dict(investor_profile=analysis_context(portfolio), dca=portfolio.get('dca'), policy=portfolio.get('policy'),
+        investment_notes=portfolio.get('investment_notes', report.get('portfolio_info', {}).get('investment_notes', {})),
+        monitored_stock_notes=[dict(symbol=s['symbol'], investment_notes=s['investment_notes'])
+            for s in report.get('stocks', []) if s.get('investment_notes') and
+            (s['symbol'] in symbols or 'MARKET' in symbols) and s['symbol'] not in {h['symbol'] for h in holdings}],
         portfolio_value_usd=live.get('total_usd'), portfolio_prices_complete=live.get('complete',False),
         portfolio_prices_stale=live.get('stale',True), portfolio_allocations=live.get('allocations'), holdings=holdings, news=news[:6],
         annual_fundamentals=cached_fundamentals(settings,symbols,now),

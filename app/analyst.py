@@ -71,7 +71,8 @@ class TemplateAnalyst(Analyst):
 
 
 # Keep data checks internal; only material gaps need to appear in the reply.
-INSTRUCTIONS = STYLE + ('\nใช้เหตุการณ์และตัวเลขที่คำนวณไว้แล้ว ไม่คำนวณซ้ำ ถ้าไม่มีข่าวแนบ อย่าเดาสาเหตุราคา '
+from app.investment_notes import CONTEXT_GUIDANCE
+INSTRUCTIONS = STYLE + CONTEXT_GUIDANCE + ('\nใช้เหตุการณ์และตัวเลขที่คำนวณไว้แล้ว ไม่คำนวณซ้ำ ถ้าไม่มีข่าวแนบ อย่าเดาสาเหตุราคา '
     'affected_portfolios คือพอร์ตแยกกัน ห้ามรวมจำนวนหุ้นหรืองบ DCA ข้ามพอร์ต '
     'ใช้ decision_context เชื่อมผลต่อพอร์ต เหตุผลถือ ข่าว และงบรายปีที่มี พร้อมชื่อแหล่งและวันที่ '
     'RSS อาจมีแค่หัวข่าว ห้ามเดาสาเหตุการขึ้นลง งบรายปีไม่ใช่มูลค่าเหมาะสมปัจจุบัน '

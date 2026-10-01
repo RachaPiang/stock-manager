@@ -111,6 +111,9 @@ def report_data(settings: Settings, now: datetime | None = None) -> dict:
             item['research_coverage'] = dict(sec='supported' if stock.symbol in CIKS else 'unsupported',
                 news='company_headlines' if stock.symbol in NAMES else 'ticker_headlines_only')
             result["stocks"].append(item)
+            from app.investment_notes import compact_notes
+            item['investment_notes'] = compact_notes(next((s.get('investment_notes') for s in
+                result['portfolio_info']['stocks'] if s['symbol'] == stock.symbol), None))
             if not connection:
                 continue
             if has_intraday:

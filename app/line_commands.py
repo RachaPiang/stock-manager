@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from app.database import Database
 from app.report import report_data
 from app.voice import STYLE, thai_time, answer_text
+from app.investment_notes import CONTEXT_GUIDANCE
 
 MENU = ('อยากให้ผมดูเรื่องไหนครับ?\n\n'
         'พอร์ตทั้งหมด / วันนี้ — ภาพรวมทุกพอร์ต\n'
@@ -262,8 +263,13 @@ def _portfolio_command(settings, store, event_id, text, now, catalog):
     if not allowed:
         return 'ถึงเพดาน AI วันนี้ หรือคำถามนี้เคยถูกประมวลผลแล้ว ใช้ พอร์ต / ข่าว / รีวิว ได้โดยไม่เรียก AI'
     from app.review import review_payload
-    payload = review_payload(portfolio, report['news']) if portfolio else {'limitations': 'No portfolio data'}
-    prompt = (STYLE+'\ncheck_more ตอบคำถามตรง ๆ อ้างอิงข่าวด้วยชื่อสำนักและวันที่เฉพาะที่ใช้: '
+    payload = review_payload(portfolio, report['news']) if portfolio else {
+        'limitations': 'No owned holdings; monitored stocks are not portfolio positions',
+        'investment_notes': report.get('portfolio_info', {}).get('investment_notes', {})}
+    payload['monitored_stock_notes'] = [dict(symbol=s['symbol'], investment_notes=s['investment_notes'])
+        for s in report.get('stocks', []) if s.get('investment_notes') and
+        s['symbol'] not in {h['symbol'] for h in (portfolio or {}).get('holdings', [])}]
+    prompt = (STYLE+CONTEXT_GUIDANCE+'\ncheck_more ตอบคำถามตรง ๆ อ้างอิงข่าวด้วยชื่อสำนักและวันที่เฉพาะที่ใช้: '
               + json.dumps({'question': text[4:][:2000], 'data': payload}, ensure_ascii=False))
     try:
         from app.ai_client import analyze

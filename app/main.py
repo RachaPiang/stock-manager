@@ -154,6 +154,12 @@ def check(settings: Settings, provider: StockProvider, analyst: Analyst, notifie
                             payload['affected_portfolios'] = affected
                             watched = [e for e in catalog.read()['portfolios'] if stock.symbol in {s['symbol'] for s in e['stocks']}]
                             payload['tracked_in'] = [e['name'] for e in watched]
+                            from app.investment_notes import compact_notes
+                            payload['tracked_portfolio_notes'] = [dict(
+                                name=e['name'], investment_notes=compact_notes(e.get('investment_notes')),
+                                stock_notes=compact_notes(next((s.get('investment_notes') for s in e['stocks']
+                                    if s['symbol'] == stock.symbol), None)))
+                                for e in watched if e['id'] not in {p['id'] for p in affected}]
                             try:
                                 from app.report import report_data
                                 from app.research_context import context

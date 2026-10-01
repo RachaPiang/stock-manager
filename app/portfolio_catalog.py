@@ -63,6 +63,8 @@ class PortfolioCatalog:
             raise ValueError('รุ่นนี้รองรับสูงสุด 10 พอร์ต')
         seen, symbols = set(), set()
         for p in value['portfolios']:
+            from app.investment_notes import validate_notes
+            validate_notes(p.get('investment_notes', {}), 'portfolio')
             if not IDENTITY.fullmatch(p['id']) or p['id'] in seen:
                 raise ValueError('รหัสพอร์ตไม่ถูกต้องหรือซ้ำ')
             seen.add(p['id'])
@@ -73,6 +75,7 @@ class PortfolioCatalog:
                 raise ValueError('น้ำหนักต้องไม่เกิน 10,000')
             own = set()
             for s in p['stocks']:
+                validate_notes(s.get('investment_notes', {}), 'stock')
                 if not SYMBOL.fullmatch(s['symbol']) or s['symbol'] in own:
                     raise ValueError('ชื่อหุ้นไม่ถูกต้องหรือซ้ำในพอร์ต')
                 own.add(s['symbol']); symbols.add(s['symbol'])
@@ -225,6 +228,18 @@ class PortfolioCatalog:
                               'currency':'THB', 'per_stock':amount/count if count else 0, 'enabled':amount>0,
                               'plan_as_of':datetime.now(UTC).isoformat()}
                 atomic_json(path, raw, backup=True)
+
+    def save_notes(self, identity, notes, *, symbol=None, expected=None):
+        from app.investment_notes import validate_notes
+        validate_notes(notes, 'stock' if symbol else 'portfolio')
+        def action(value):
+            target = self.entry(identity, value)
+            if symbol:
+                target = next((s for s in target['stocks'] if s['symbol'] == symbol), None)
+                if target is None:
+                    raise ValueError('ไม่พบหุ้นนี้ในพอร์ตที่เลือก กรุณาโหลดข้อมูลใหม่')
+            target['investment_notes'] = copy.deepcopy(notes)
+        self._change(action, expected)
 
     def weights(self):
         """Normalize nested priorities; shared tickers accumulate interest once."""

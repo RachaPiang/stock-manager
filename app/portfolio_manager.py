@@ -175,13 +175,24 @@ def main():
         catalog.save_dca(chosen,amount,day); update_report()
         status.set('บันทึกแผนเตือน DCA ของพอร์ตนี้แล้ว หากต้องการเปลี่ยนรายการซื้อ ให้จัดการในโบรกเกอร์เอง')
 
+    def notes(stock=False):
+        from app.notes_editor import open_editor
+        ticker = None
+        if stock:
+            if not stocks.selection():
+                raise ValueError('เลือกหุ้นจากตารางก่อนครับ')
+            ticker = stocks.selection()[0]
+        open_editor(root, settings, identity(), ticker, on_saved=lambda: (reload_data(identity()), update_report()))
+
     ttk.Button(port_tools,text='ปรับความสำคัญพอร์ต',command=lambda:guarded(edit_weight)).pack(side='left')
     ttk.Button(port_tools,text='เพิ่มพอร์ต',command=lambda:guarded(create)).pack(side='right')
     ttk.Button(port_tools,text='ใช้เป็นพอร์ตหลักใน LINE',command=lambda:guarded(select)).pack(side='right',padx=6)
     ttk.Button(stock_tools,text='ปรับความสำคัญหุ้น',command=lambda:guarded(lambda:edit_weight(stock=True))).pack(side='left')
+    ttk.Button(stock_tools,text='คำอธิบายหุ้น',command=lambda:guarded(lambda:notes(stock=True))).pack(side='left',padx=6)
     ttk.Button(stock_tools,text='เพิ่มหุ้น',command=lambda:guarded(add)).pack(side='right')
     ttk.Button(stock_tools,text='แก้ยอดหุ้น / ต้นทุน',command=lambda:guarded(edit_totals)).pack(side='right',padx=6)
     ttk.Button(footer,text='แผน DCA พอร์ตนี้',command=lambda:guarded(dca)).pack(side='left')
+    ttk.Button(footer,text='คำอธิบายพอร์ต',command=lambda:guarded(notes)).pack(side='left',padx=6)
     ttk.Button(footer,text='โหลดข้อมูลล่าสุด',command=lambda:guarded(lambda:reload_data(identity()))).pack(side='right')
     def explain_quota():
         messagebox.showinfo('วิธีแบ่งโควตา',

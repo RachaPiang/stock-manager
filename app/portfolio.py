@@ -20,6 +20,8 @@ def load_portfolio(directory: Path, portfolio_id: str = "") -> dict | None:
     profile['quantity_as_of'] = quantity_effective_at(profile, path.parent)
     profile['portfolio_id'] = catalog.selected()['id']
     profile['portfolio_name'] = catalog.selected()['name']
+    from app.investment_notes import attach_notes
+    attach_notes(profile, catalog.selected())
     return profile
 
 
@@ -211,5 +213,6 @@ def analyst_context(profile: dict, symbol: str, quote: dict | None = None) -> di
         holding.pop('live_weight_pct', None)  # A single-stock quote cannot determine the current portfolio weight.
     return {"as_of": profile["as_of"], "status": "user_reported_historical_snapshot_not_live",
             "holding": holding, "policy": profile["policy"], "dca": profile["dca"],
+              "investment_notes": profile.get('investment_notes', {}),
             'valuation_status': 'latest_saved_price' if holding and 'live_value_usd' in holding else 'snapshot_only',
             "limitations": "gain_pct/value_usd are the original snapshot. live_* fields use latest saved prices at live_as_of. Inferred cost is approximate; no broker sync, cash, FX, dividends, fees or transaction history. No verified fundamentals."}

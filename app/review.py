@@ -8,6 +8,7 @@ from app.codex_client import CodexError, analyze
 from app.config import Settings
 from app.investor_profile import analysis_context, readiness_note
 from app.voice import STYLE, answer_text
+from app.investment_notes import CONTEXT_GUIDANCE
 
 
 def period_key(now: datetime) -> str:
@@ -31,11 +32,13 @@ def review_payload(portfolio: dict, news: list[dict]) -> dict:
         "dca": portfolio["dca"],
         "policy": portfolio["policy"],
         "investor_profile": analysis_context(portfolio),
+        "investment_notes": portfolio.get('investment_notes', {}),
         "holdings": [{"symbol": h["symbol"], "weight_pct": h.get("live_weight_pct", h["weight_pct"]),
                       'snapshot_gain_pct': h['gain_pct'], 'latest_saved_gain_pct': h.get('live_gain_pct'),
                       'latest_saved_gain_usd': h.get('live_gain_usd'), 'price_as_of': h.get('live_as_of'),
                       'price_stale': h.get('live_stale', True), 'cost_source': h.get('cost_source'),
-                      "thesis": h.get("thesis", "ยังไม่ได้ระบุเหตุผลที่ถือ")} for h in portfolio["holdings"]],
+                      "thesis": h.get("thesis", "ยังไม่ได้ระบุเหตุผลที่ถือ"),
+                      "investment_notes": h.get('investment_notes', {})} for h in portfolio["holdings"]],
         "important_news": [{"symbol": item["symbol"], "published_at": item["published_at"],
                             "title": item["title"], "reason": item["reason"],
                             "source_name": item["source_name"], "excerpt": item.get('excerpt', '')[:400]}
@@ -65,7 +68,7 @@ def create_review(settings: Settings, payload: dict) -> tuple[str, bool]:
             return local_review(payload), False
         try:
             import requests
-            prompt = (STYLE + '\nรีวิวพอร์ตระยะยาวจากข้อมูลต่อไปนี้ เป็นภาษาไทย ระบุสิ่งที่ควรตรวจ ทางเลือกแบบมีเงื่อนไข '
+            prompt = (STYLE + CONTEXT_GUIDANCE + '\nรีวิวพอร์ตตามแผนและระยะเวลาที่เจ้าของกำหนดจากข้อมูลต่อไปนี้ เป็นภาษาไทย ระบุสิ่งที่ควรตรวจ ทางเลือกแบบมีเงื่อนไข '
                       'และความเสี่ยง ห้ามสั่งซื้อขาย:\n' + json.dumps(payload, ensure_ascii=False, allow_nan=False))
             response = requests.post('https://generativelanguage.googleapis.com/v1beta/interactions',
                 headers={'x-goog-api-key': settings.gemini_api_key},
@@ -80,7 +83,7 @@ def create_review(settings: Settings, payload: dict) -> tuple[str, bool]:
             return local_review(payload) + '\nหมายเหตุ: Gemini ใช้งานไม่ได้ จึงใช้แม่แบบสำรอง', False
     if settings.analyst_mode != "codex":
         return local_review(payload), False
-    prompt = STYLE + '\nรีวิวพอร์ตระยะยาวจากข้อมูลต่อไปนี้:\n' + json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    prompt = STYLE + CONTEXT_GUIDANCE + '\nรีวิวพอร์ตตามแผนและระยะเวลาที่เจ้าของกำหนดจากข้อมูลต่อไปนี้:\n' + json.dumps(payload, ensure_ascii=False, allow_nan=False)
     try:
         answer = analyze(settings, prompt)
     except CodexError:
