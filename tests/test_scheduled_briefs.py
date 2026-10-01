@@ -14,18 +14,18 @@ def at(value):
 
 
 def test_close_deadline_dst_weekend_and_holidays():
-    before = due_periods(at('2026-09-26T10:59:00'))
+    before = due_periods(at('2026-09-26T10:59:00'), delivery_hour=18)
     assert not any(p['end'] == '2026-09-25' for p in before)
-    after = due_periods(at('2026-09-26T11:00:00'))
+    after = due_periods(at('2026-09-26T11:00:00'), delivery_hour=18)
     week = next(p for p in after if p['kind'] == 'weekly')
     assert (week['start'], week['end']) == ('2026-09-18', '2026-09-25')
-    early = due_periods(at('2026-11-28T11:00:00'))
+    early = due_periods(at('2026-11-28T11:00:00'), delivery_hour=18)
     assert any(p['kind'] == 'weekly' and p['end'] == '2026-11-27' for p in early)
-    holiday = due_periods(at('2026-07-03T11:00:00'))
+    holiday = due_periods(at('2026-07-03T11:00:00'), delivery_hour=18)
     assert any(p['kind'] == 'weekly' and p['end'] == '2026-07-02' for p in holiday)
-    winter = due_periods(at('2026-12-02T10:59:00'))
+    winter = due_periods(at('2026-12-02T10:59:00'), delivery_hour=18)
     assert not any(p['end'] == '2026-12-01' for p in winter)
-    month = next(p for p in due_periods(at('2026-05-30T11:00:00')) if p['kind'] == 'monthly')
+    month = next(p for p in due_periods(at('2026-05-30T11:00:00'), delivery_hour=18) if p['kind'] == 'monthly')
     assert (month['start'], month['end']) == ('2026-04-30', '2026-05-29')
     assert due_periods(at('2030-01-01T21:30:00')) == []
 

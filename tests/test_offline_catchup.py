@@ -1,6 +1,7 @@
 """Restart/offline scenarios: test the delivery boundary without any real APIs."""
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, date
+from zoneinfo import ZoneInfo
 
 from app.analyst import TemplateAnalyst
 from app.close_sync import check_close_signals
@@ -18,13 +19,29 @@ def at(value):
 
 
 def test_latest_daily_before_evening_and_monthly_after_week_offline():
-    morning = due_periods(at('2026-09-30T10:00:00+07:00'))
+    morning = due_periods(at('2026-09-30T10:00:00+07:00'), delivery_hour=18)
     assert next(p for p in morning if p['kind'] == 'daily')['end'] == '2026-09-28'
     evening = due_periods(at('2026-09-30T19:00:00+07:00'))
     assert next(p for p in evening if p['kind'] == 'daily')['end'] == '2026-09-29'
     resumed = due_periods(at('2026-10-10T19:00:00+07:00'))
     assert next(p for p in resumed if p['kind'] == 'monthly')['end'] == '2026-09-30'
     assert len([p for p in resumed if p['kind'] == 'daily']) == 1
+
+
+def test_morning_delivery_waits_until_ten_and_uses_latest_completed_close():
+    before=due_periods(at('2026-09-26T09:59:00+07:00'))
+    assert not any(p['end']=='2026-09-25' for p in before)
+    after=due_periods(at('2026-09-26T10:00:00+07:00'))
+    assert next(p for p in after if p['kind']=='daily')['end']=='2026-09-25'
+    assert next(p for p in after if p['kind']=='weekly')['end']=='2026-09-25'
+    assert all(p['ready'].astimezone(ZoneInfo('Asia/Bangkok')).hour==10 for p in after)
+    morning=due_periods(at('2026-10-01T10:00:00+07:00'))
+    assert next(p for p in morning if p['kind']=='monthly')['end']=='2026-09-30'
+    winter=due_periods(at('2026-12-02T10:00:00+07:00'))
+    assert next(p for p in winter if p['kind']=='daily')['end']=='2026-12-01'
+    # Starting in the evening keeps the same report identity and morning time.
+    resumed=due_periods(at('2026-09-26T19:00:00+07:00'))
+    assert next(p for p in resumed if p['kind']=='daily')['key']==next(p for p in after if p['kind']=='daily')['key']
 
 
 def test_delayed_news_found_after_three_days_and_not_replayed(settings, tmp_path, monkeypatch):
@@ -88,7 +105,7 @@ def test_monday_news_catches_up_on_friday_once(settings, tmp_path, monkeypatch):
 
 
 def test_dca_missed_28th_delivered_after_start_then_stops_when_confirmed(settings, tmp_path, monkeypatch):
-    settings = replace(settings, mock_mode=False)
+    settings = replace(settings, mock_mode=False, manager_delivery_hour=18)
     store = ManagerStore(tmp_path/'manager.sqlite3')
     store.set('reports-enabled-at', '2026-09-23T00:00:00+00:00')
     monkeypatch.setattr('app.portfolio.load_portfolio', lambda *a: {'dca': {

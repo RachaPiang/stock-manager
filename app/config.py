@@ -98,7 +98,7 @@ class Settings:
     line_user_id: str = field(default="", repr=False)
     line_channel_secret: str = field(default='', repr=False)
     manager_push_limit: int = 8
-    manager_delivery_hour: int = 18
+    manager_delivery_hour: int = 10
     manager_catchup_days: int = 7
 
     @classmethod
@@ -153,7 +153,7 @@ class Settings:
             line_token=env("LINE_CHANNEL_ACCESS_TOKEN"), line_user_id=env("LINE_USER_ID"),
             line_channel_secret=env('LINE_CHANNEL_SECRET'),
             manager_push_limit=int(env('MANAGER_PUSH_LIMIT_PER_DAY', '8')),
-            manager_delivery_hour=int(env('MANAGER_DELIVERY_HOUR', '18')),
+            manager_delivery_hour=int(env('MANAGER_DELIVERY_HOUR', '10')),
             manager_catchup_days=int(env('MANAGER_CATCHUP_DAYS', '7')),
         )
         if (settings.configured_analyst_mode not in {"template", "openai", "codex", "gemini"}

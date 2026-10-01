@@ -9,8 +9,8 @@ from app.market import NY, HOLIDAYS, is_open, session_close, completed_session
 BANGKOK = ZoneInfo('Asia/Bangkok')
 
 
-def delivery_time(close, hour=18):
-    """Send completed-session reports in the owner's evening, never before close."""
+def delivery_time(close, hour=10):
+    """Send at the owner's Thai time, after the session has actually closed."""
     closed = close + timedelta(minutes=30)
     local_day = closed.astimezone(BANGKOK).date()
     return max(closed, datetime.combine(local_day, time(hour), BANGKOK))
@@ -26,7 +26,7 @@ def session_on_or_before(day):
     return None
 
 
-def due_periods(now, delivery_hour=18, catchup_days=7):
+def due_periods(now, delivery_hour=10, catchup_days=7):
     """Latest only; allow catch-up without replaying months of old messages."""
     last = completed_session(now)
     if last is None:
@@ -40,7 +40,7 @@ def due_periods(now, delivery_hour=18, catchup_days=7):
         if ready <= now < ready + max_age:
             result.append(dict(kind=kind, start=start.isoformat(), end=end.isoformat(),
                                key=f'{kind}:{end}', ready=ready, closed=closed))
-    # Before this evening, yesterday's unsent report may still be due.
+    # Before today's scheduled time, the previous unsent report may still be due.
     daily_end = last
     while daily_end and delivery_time(session_close(daily_end), delivery_hour) > now:
         daily_end = session_on_or_before(daily_end-timedelta(days=1))

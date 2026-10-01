@@ -117,7 +117,7 @@ def _run_due_single(settings, store, now=None):
     periods = [p for p in due_periods(now, settings.manager_delivery_hour, settings.manager_catchup_days)
                if p['closed'] >= enabled_at]
     missing = [p for p in periods if not store.brief(p['key'])]
-    # Also recover prices on startup before the evening delivery time. Shared
+    # Also recover prices on startup before the scheduled delivery time. Shared
     # history caches, locks and API accounting keep this to one hourly attempt.
     last_sync = float(store.get('brief-close-sync-at', '0'))
     if now.timestamp()-last_sync >= 3600:
@@ -173,7 +173,7 @@ def _run_due_single(settings, store, now=None):
             store.enqueue('close:'+period['key'], saved['message'], now.timestamp(), settings.manager_push_limit,
                           scheduled_for=period['ready'].timestamp())
 
-    # Monday evening Bangkok; replay only the latest eligible week after downtime.
+    # Monday at the configured Thai time; replay the latest eligible missed week.
     local = now.astimezone(BANGKOK)
     monday = local.date()-timedelta(days=local.weekday())
     ready = datetime.combine(monday, time(settings.manager_delivery_hour), BANGKOK)

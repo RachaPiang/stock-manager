@@ -518,6 +518,33 @@ def test_line_reply_and_push_include_navigation_without_extra_requests(live,monk
     assert 'พอร์ตทั้งหมด' in {b['action']['text'] for b in buttons}
 
 
+def test_zero_dca_portfolio_stays_monitored_without_reminders_at_morning_time(live):
+    from app.line_webhook import schedule
+    from zoneinfo import ZoneInfo
+    c=PortfolioCatalog(live); other=c.create('Speculative')
+    c.add_stock(other,'AIP',quantity=1,cost_basis_usd=10)
+    c.save_dca(other,0)
+    assert 'AIP' in {s.symbol for s in live.stocks()}
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    store.set('reports-enabled-at','2026-10-01T00:00:00+00:00')
+    before=datetime(2026,10,28,9,59,tzinfo=ZoneInfo('Asia/Bangkok'))
+    schedule(live,store,before)
+    assert store.pending(before.timestamp()) is None
+    ready=before.replace(hour=10,minute=0)
+    schedule(live,store,ready)
+    with store.connect() as db:
+        rows=list(db.execute('SELECT id,scheduled_for FROM outbox'))
+    assert len(rows)==1 and rows[0]['id']=='schedule:dca:2026-10'
+    assert rows[0]['scheduled_for']==ready.timestamp()
+    resumed=ready.replace(hour=19)
+    row=ManagerStore(store.path).pending(resumed.timestamp())
+    assert 'กำหนดแจ้งเดิม: 28/10/2026 10:00 น.' in row['message']
+    assert 'เริ่มแจ้งย้อนหลัง: 28/10/2026 19:00 น.' in row['message']
+    schedule(live,store,resumed)
+    with store.connect() as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0]==1
+
+
 def test_unsaved_weekly_news_falls_back_to_news_from_both_portfolios(live,monkeypatch):
     c,other,reports=two_portfolio_reports(live,monkeypatch)
     now=datetime(2026,9,23,15,tzinfo=UTC)
