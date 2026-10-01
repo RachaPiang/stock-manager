@@ -14,6 +14,7 @@ if (Test-Path -LiteralPath $launcher) {
 }
 $vbs = @"
 Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = "$projectRoot"
 shell.Run Chr(34) & "$pythonPath" & Chr(34) & " -m app.line_webhook", 0, False
 shell.Run Chr(34) & "$pythonPath" & Chr(34) & " -m app.market_daemon", 0, False
 "@
