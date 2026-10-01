@@ -97,9 +97,12 @@ def run_due(settings, store, now=None):
     from app.portfolio_scope import ScopedStore
     from app.portfolio import load_portfolio
     for p in sorted(PortfolioCatalog(settings).read()['portfolios'], key=lambda p:-p['priority']):
-        if p['id'] != 'main' and not load_portfolio(settings.database_path.parent, p['id']):
-            continue
-        _run_due_single(replace(settings,portfolio_id=p['id']),ScopedStore(store,p['id']),now)
+        try:
+            if p['id'] != 'main' and not load_portfolio(settings.database_path.parent, p['id']):
+                continue
+            _run_due_single(replace(settings,portfolio_id=p['id']),ScopedStore(store,p['id']),now)
+        except Exception as exc:
+            log.warning('Scheduled brief failed for portfolio %s (%s); continuing others',p['id'],type(exc).__name__)
 
 
 def _run_due_single(settings, store, now=None):
@@ -153,7 +156,8 @@ def _run_due_single(settings, store, now=None):
                     continue
             message = render_period(numbers, period['kind'])
             if len(report.get('portfolio_catalog', [])) > 1:
-                message = 'พอร์ต '+report['portfolio_info']['name']+'\n\n'+message
+                from app.line_portfolios import portfolio_heading
+                message = portfolio_heading(report['portfolio_info']['name'])+'\n\n'+message
             if now.astimezone(BANGKOK).date() > period['ready'].astimezone(BANGKOK).date():
                 message = 'ตามเก็บสรุปที่ยังไม่ได้ส่งครับ\n\n'+message
             answer = None

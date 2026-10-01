@@ -383,3 +383,211 @@ def test_line_can_show_watch_only_stock_without_faking_holdings(live):
     text=command(live,store,'watch','หุ้น AAPL')
     assert 'ติดตามอย่างเดียว' in text and 'ยังไม่มีราคา' in text
     assert load_portfolio(c.directory,other) is None
+
+
+def two_portfolio_reports(live, monkeypatch):
+    c=PortfolioCatalog(live); other=c.create('พอร์ตเติบโต')
+    c.add_stock(other,'META',quantity=3,cost_basis_usd=200)
+    c.save_dca(other,500)
+    quotes={'META':dict(price=100,previous_close=90,as_of='2026-09-23T15:00:00+00:00'),
+            'V':dict(price=50,previous_close=55,as_of='2026-09-23T15:00:00+00:00')}
+    reports={}
+    for p in c.read()['portfolios']:
+        profile=load_portfolio(c.directory,p['id'])
+        attach_live_valuation(profile,quotes)
+        reports[p['id']]=dict(portfolio=profile,news=[],stocks=[])
+    monkeypatch.setattr('app.line_commands.report_data',lambda settings,*a:reports[settings.portfolio_id])
+    return c,other,reports
+
+
+def test_line_overview_totals_weighted_gains_and_selection_unchanged(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    store=ManagerStore(c.directory/'line-manager.sqlite3'); original=c.digest()
+    now=datetime(2026,9,23,15,tzinfo=UTC)
+    answer=command(live,store,'all','พอร์ตทั้งหมด',now)
+    assert '1. พอร์ตหลัก' in answer and '2. พอร์ตเติบโต' in answer
+    assert 'มูลค่าหุ้นรวมทุกพอร์ต $550.00' in answer
+    assert 'กำไร/ขาดทุนรวม $+170.00 (+44.74%)' in answer
+    assert answer==command(live,store,'today','วันนี้',now)
+    assert c.digest()==original
+    assert not live.database_path.exists()  # No quote fetch or AI reservation.
+
+
+def test_line_overview_never_adds_incomplete_portfolio_to_total(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    reports[other]['portfolio']['live']={'complete':False}
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    answer=command(live,store,'all','พอร์ตทั้งหมด')
+    assert 'มูลค่า $250.00' in answer and 'ยอดรวมทุกพอร์ตรอราคา' in answer
+    assert 'มูลค่าหุ้นรวมทุกพอร์ต $' not in answer
+
+
+def test_line_overview_missing_cost_and_stale_quotes_are_explicit(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    reports[other]['portfolio']['live'].update(cost_usd=None,gain_usd=None,gain_pct=None,stale=True)
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    answer=command(live,store,'all','พอร์ตทั้งหมด')
+    assert 'มูลค่าหุ้นรวมทุกพอร์ต $550.00' in answer
+    assert 'กำไรรวมรอยืนยันต้นทุนครบทุกพอร์ต' in answer
+    assert 'ยอดรวมนี้มีราคาที่ยังเก่า' in answer
+    assert 'กำไร/ขาดทุนรวม $' not in answer
+
+
+def test_line_overview_continues_when_one_profile_cannot_be_read(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    def report(settings,*a):
+        if settings.portfolio_id==other: raise ValueError('invalid profile')
+        return reports[settings.portfolio_id]
+    monkeypatch.setattr('app.line_commands.report_data',report)
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    answer=command(live,store,'all','พอร์ตทั้งหมด')
+    assert 'มูลค่า $250.00' in answer and 'อ่านข้อมูลพอร์ตนี้ไม่สำเร็จ' in answer
+    assert 'มูลค่าหุ้นรวมทุกพอร์ต $' not in answer
+
+
+def test_switch_portfolio_immediately_shows_its_values_and_scopes_replies(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    answer=command(live,store,'choose','เลือกพอร์ต 2')
+    assert 'พอร์ตเติบโต' in answer and 'มูลค่าหุ้นรวม $300.00' in answer
+    assert c.selected()['id']==other
+    draft=command(live,store,'edit','บันทึก META 4 250')
+    assert draft.startswith('พอร์ตเติบโต\n') and '3.0 → 4' in draft
+    assert load_portfolio(c.directory,'main')['holdings'][0]['quantity']==2
+
+
+def test_dca_overview_tracks_each_cycle_independently(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    now=datetime(2026,9,28,12,tzinfo=UTC)
+    ScopedStore(store,other).set('dca_updated','2026-09')
+    answer=command(live,store,'dca','DCA ทั้งหมด',now)
+    assert '1,800 THB/เดือน' in answer and '500 THB/เดือน' in answer
+    first,second=answer.split('2. พอร์ตเติบโต')
+    assert 'รออัปเดตยอด' in first and 'ตรวจยอดรอบนี้แล้ว' in second
+    assert c.selected()['id']=='main'
+
+
+def test_quick_reply_navigation_contains_all_portfolios_and_push_is_retry_stable(live):
+    from app.line_portfolios import quick_replies
+    c=PortfolioCatalog(live); other=c.create('Growth')
+    before=quick_replies(live,dynamic=False)
+    buttons=quick_replies(live)['items']
+    assert len(buttons)<=13
+    texts={b['action']['text'] for b in buttons}
+    assert {'พอร์ตทั้งหมด','เลือกพอร์ต 1','เลือกพอร์ต 2'}<=texts
+    c.select(other)
+    assert quick_replies(live,dynamic=False)==before
+    for i in range(8): c.create('ชื่อพอร์ตยาวมากเพื่อทดสอบตัวอักษรไทย '+str(i))
+    buttons=quick_replies(live)['items']
+    assert len(buttons)==13
+    assert all(len(b['action']['label'].encode('utf-16-le'))<=40 for b in buttons)
+    assert 'เลือกพอร์ต 10' in {b['action']['text'] for b in buttons}
+
+
+def test_both_dca_reminders_name_main_and_link_to_the_correct_portfolio(live):
+    from app.line_webhook import schedule
+    c=PortfolioCatalog(live); other=c.create('Growth')
+    c.add_stock(other,'META',quantity=3,cost_basis_usd=200); c.save_dca(other,500)
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    schedule(live,store,datetime(2026,10,28,12,tzinfo=UTC))
+    with store.connect() as db:
+        rows={r['id']:r['message'] for r in db.execute('SELECT * FROM outbox')}
+    first=rows['schedule:dca:2026-10']; second=rows['schedule:dca:2026-10:portfolio:'+other]
+    assert first.startswith('พอร์ตหลัก') and 'เลือกพอร์ต 1' in first
+    assert second.startswith('พอร์ต Growth') and 'เลือกพอร์ต 2' in second
+
+
+def test_line_reply_and_push_include_navigation_without_extra_requests(live,monkeypatch):
+    import requests
+    from types import SimpleNamespace
+    from app.notifier import LineNotifier
+    c=PortfolioCatalog(live); c.create('Other')
+    calls=[]
+    def post(url,**kw):
+        calls.append(kw['json'])
+        return SimpleNamespace(status_code=200,headers={})
+    monkeypatch.setattr(requests,'post',post)
+    notifier=LineNotifier(live)
+    notifier.reply('ตอบกลับ','reply-token')
+    notifier.send('เตือน','retry-key','owner')
+    assert len(calls)==2
+    buttons=calls[0]['messages'][-1]['quickReply']['items']
+    assert 'เลือกพอร์ต 2' in {b['action']['text'] for b in buttons}
+    buttons=calls[1]['messages'][-1]['quickReply']['items']
+    assert 'พอร์ตทั้งหมด' in {b['action']['text'] for b in buttons}
+
+
+def test_unsaved_weekly_news_falls_back_to_news_from_both_portfolios(live,monkeypatch):
+    c,other,reports=two_portfolio_reports(live,monkeypatch)
+    now=datetime(2026,9,23,15,tzinfo=UTC)
+    def item(symbol):
+        return dict(source_id='web:'+symbol,symbol=symbol,title=symbol+' earnings',
+            excerpt='',published_at=now.isoformat(),source_name='Reuters',
+            source_url='https://news.google.com/rss/articles/test')
+    reports['main']['news']=[item('V')]
+    reports[other]['news']=[item('META')]
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    answer=command(live,store,'news','ข่าว',now)
+    assert 'V earnings' in answer and 'META earnings' in answer
+    assert not answer.startswith('พอร์ตหลัก')
+
+
+def test_scheduled_brief_failure_does_not_stop_other_portfolio(live,monkeypatch):
+    from app.scheduled_briefs import run_due
+    c=PortfolioCatalog(live); other=c.create('Other')
+    c.add_stock(other,'META',quantity=3,cost_basis_usd=200)
+    calls=[]
+    def run(settings,store,now):
+        calls.append(settings.portfolio_id)
+        if settings.portfolio_id=='main': raise ValueError('incomplete data')
+    monkeypatch.setattr('app.scheduled_briefs._run_due_single',run)
+    run_due(live,ManagerStore(c.directory/'line-manager.sqlite3'))
+    assert calls==['main',other]
+
+
+def test_research_event_for_other_portfolio_uses_its_context_once(live,monkeypatch):
+    from app.research_monitor import render
+    c=PortfolioCatalog(live); other=c.create('Other')
+    c.add_stock(other,'AAPL',quantity=3,cost_basis_usd=200)
+    called=[]
+    monkeypatch.setattr('app.report.report_data',lambda settings,*a:dict(identity=settings.portfolio_id))
+    monkeypatch.setattr('app.research_context.context',lambda settings,*a:dict(
+        holdings=[dict(symbol='AAPL',quantity=3)],dca={'monthly_total':500},portfolio_prices_complete=True))
+    def interpret(settings,key,payload,*a,**kw):
+        called.append((payload,kw))
+        return dict(check_more='พบข่าว',risks='ติดตามงบ',options='รอข้อมูลเพิ่ม')
+    monkeypatch.setattr('app.scheduled_briefs.interpret',interpret)
+    now=datetime(2026,9,23,15,tzinfo=UTC)
+    item=dict(symbol='AAPL',source_id='web:aapl',title='AAPL earnings',published_at=now.isoformat(),
+              source_name='Reuters',source_url='https://news.google.com/rss/articles/test')
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    render(live,store,'research:test',[item],now)
+    assert len(called)==1 and called[0][1]['private'] is True
+    payload=called[0][0]
+    assert [p['id'] for p in payload['affected_portfolios']]==[other]
+    assert payload['context']['holdings'][0]['quantity']==3
+    assert 'เกี่ยวข้องกับพอร์ต: Other' in store.brief('research:test')['message']
+
+
+def test_shared_research_event_one_analysis_separate_holdings(live,monkeypatch):
+    from app.research_monitor import render
+    c=PortfolioCatalog(live); other=c.create('Other')
+    c.add_stock(other,'META',quantity=3,cost_basis_usd=200)
+    monkeypatch.setattr('app.report.report_data',lambda *a:{})
+    def context(settings,*a):
+        p=load_portfolio(c.directory,settings.portfolio_id)
+        return dict(holdings=[{'symbol':'META','quantity':p['holdings'][0]['quantity']}],dca=p['dca'])
+    monkeypatch.setattr('app.research_context.context',context)
+    calls=[]
+    monkeypatch.setattr('app.scheduled_briefs.interpret',lambda settings,key,payload,*a,**kw:calls.append(payload))
+    now=datetime(2026,9,23,15,tzinfo=UTC)
+    item=dict(symbol='META',source_id='web:meta',title='Meta earnings',published_at=now.isoformat(),
+              source_name='Reuters',source_url='https://news.google.com/rss/articles/test')
+    store=ManagerStore(c.directory/'line-manager.sqlite3')
+    render(live,store,'research:shared',[item],now)
+    assert len(calls)==1
+    assert [p['context']['holdings'][0]['quantity'] for p in calls[0]['affected_portfolios']]==[2,3]
+    saved=store.brief('research:shared')
+    assert 'พอร์ตหลัก / Other' in saved['message']
+    assert not saved['ai_used']  # Local fallback still names both portfolios.

@@ -10,17 +10,18 @@ from app.report import report_data
 from app.voice import STYLE, thai_time, answer_text
 
 MENU = ('อยากให้ผมดูเรื่องไหนครับ?\n\n'
-        'พอร์ตทั้งหมด / เลือกพอร์ต 2 — ดูและสลับพอร์ต\n'
+        'พอร์ตทั้งหมด / วันนี้ — ภาพรวมทุกพอร์ต\n'
+        'กดชื่อพอร์ต หรือ เลือกพอร์ต 2 — ดูรายละเอียดพอร์ตนั้น\n'
         'งบระบบ — ดูการแบ่งความถี่และโควตา AI\n'
-        'วันนี้ — พอร์ตตอนนี้เป็นอย่างไร\n'
         'พอร์ต — มูลค่า กำไร และสัดส่วน\n'
         'แผนลงทุน — ข้อเสนอและเงื่อนไขที่ควรเพิ่ม รอ หรือทบทวน\n'
         'หุ้น NVDA — เจาะดูหุ้นทีละตัว (พิมพ์ หุ้น เพื่อดูทั้งหมด)\n\n'
         'ปิดตลาด / สัปดาห์ / เดือน — อ่านสรุปรอบล่าสุด\n'
-        'ข่าว — สรุปตลาดและหุ้นทั้งพอร์ต\n'
+        'ข่าว — สรุปตลาดและหุ้นทุกพอร์ต\n'
         'ข่าว META — ข่าวของตัวที่สนใจ\n\n'
         'ติดตาม — สถานะตรวจข่าวและเอกสารใหม่\n'
-        'DCA — เช็กแผนเดือนนี้\n'
+        'DCA ทั้งหมด — เช็กแผนและการอัปเดตของทุกพอร์ต\n'
+        'DCA — แผนของพอร์ตที่เลือก\n'
         'อัปเดต — บันทึกยอดหลังซื้อ\n'
         'ถาม ตามด้วยคำถาม — คุยกับผมเรื่องพอร์ตได้เลยครับ')
 
@@ -36,23 +37,38 @@ def command(settings, store, event_id, text, now=None):
     from app.portfolio_catalog import PortfolioCatalog
     from app.portfolio_scope import ScopedStore
     catalog = PortfolioCatalog(settings)
-    if text == 'พอร์ตทั้งหมด':
-        entries = catalog.read()['portfolios']
-        chosen = catalog.selected()['id']
-        return '\n'.join(['พอร์ตที่บันทึกไว้ครับ']+[f"{'✓ ' if p['id']==chosen else ''}{i}. {p['name']} · {len(p['stocks'])} หุ้น" for i,p in enumerate(entries,1)]+[
-            '', 'เปลี่ยนพอร์ตสำหรับคำสั่ง LINE: พิมพ์ เลือกพอร์ต 2',
-            'เพิ่มพอร์ต/หุ้นและปรับความสำคัญ: เปิด Manage Portfolios.cmd บนเครื่อง',
-            'ทุกพอร์ตยังถูกติดตามพร้อมกัน การเลือกเปลี่ยนเฉพาะหน้าที่กำลังคุยครับ'])
+    value = catalog.read()
+    multiple = len(value['portfolios']) > 1
+    if text in {'พอร์ตทั้งหมด', 'ภาพรวม', 'ทุกพอร์ต'} or (multiple and text in {'วันนี้', 'สรุป', 'สรุปวันนี้'}):
+        from app.line_portfolios import portfolio_overview
+        return portfolio_overview(settings, store, now, report_data)
+    if text.upper() == 'DCA ทั้งหมด':
+        from app.line_portfolios import dca_overview
+        return dca_overview(settings, store, now, report_data)
     if text.startswith('เลือกพอร์ต '):
-        entries = catalog.read()['portfolios']
+        entries = value['portfolios']
         wanted = text.removeprefix('เลือกพอร์ต ').strip()
         entry = next((p for i,p in enumerate(entries,1) if wanted in {str(i), p['id'], p['name']}), None)
         if not entry:
             return 'ไม่พบพอร์ตครับ พิมพ์ พอร์ตทั้งหมด เพื่อดูหมายเลข'
         catalog.select(entry['id'])
-        return 'เลือก '+entry['name']+' แล้วครับ พิมพ์ พอร์ต เพื่อดูยอดของพอร์ตนี้'
-    settings = replace(settings, portfolio_id=catalog.selected()['id'])
+        selected_settings = replace(settings, portfolio_id=entry['id'])
+        return ('เลือก '+entry['name']+' แล้วครับ\n\n'
+                +command(selected_settings, store, event_id, 'พอร์ต', now)
+                +'\n\nกด ข่าว / DCA / อัปเดต เพื่อดูต่อในพอร์ตนี้ หรือ พอร์ตทั้งหมด เพื่อกลับภาพรวม')
+    selected = catalog.selected(value)
+    settings = replace(settings, portfolio_id=selected['id'])
     store = ScopedStore(store, settings.portfolio_id)
+    result = _portfolio_command(settings, store, event_id, text, now, catalog)
+    global_commands = {'เมนู','ช่วยเหลือ','help','menu','งบระบบ','debug','ติดตาม','พัก','เปิด',
+                       'พักแจ้งเตือน','เปิดแจ้งเตือน','ข่าว'}
+    if multiple and text not in global_commands:
+        from app.line_portfolios import portfolio_heading
+        result = portfolio_heading(selected['name'])+'\n\n'+result
+    return result
+
+
+def _portfolio_command(settings, store, event_id, text, now, catalog):
     if text in {'งบระบบ', 'debug'}:
         from app.budget_planner import debug_usage
         p = debug_usage(settings,now)
@@ -76,10 +92,13 @@ def command(settings, store, event_id, text, now=None):
     if text == 'ติดตาม':
         raw=store.get('research-status')
         if not raw:
-            return 'กำลังรอรอบตรวจข่าวและเอกสารใหม่ครั้งแรกครับ'
+            return ('ติดตามพร้อมกัน: '+' / '.join(p['name'] for p in catalog.read()['portfolios'])
+                    +'\nกำลังรอรอบตรวจข่าวและเอกสารใหม่ครั้งแรกครับ')
         status=json.loads(raw)
         labels={'news':'ข่าวตลาดและหุ้น','filings':'เอกสาร SEC ใหม่','fundamentals':'งบรายปี'}
         lines=['สถานะการติดตามครับ','ตรวจล่าสุด '+thai_time(status['at'])]
+        entries = catalog.read()['portfolios']
+        lines.append('ติดตามพร้อมกัน: '+' / '.join(p['name'] for p in entries))
         for kind,feeds in status['sources'].items():
             ok=sum(v in {'ok','available'} for v in feeds.values())
             lines.append(f'{labels.get(kind,kind)}: สำเร็จ {ok}/{len(feeds)} แหล่ง')
@@ -90,7 +109,7 @@ def command(settings, store, event_id, text, now=None):
         return '\n'.join(lines)
     if text in {'พักแจ้งเตือน', 'เปิดแจ้งเตือน'}:
         store.set('paused', '1' if text == 'พักแจ้งเตือน' else '0')
-        return text+'สำหรับรีวิว ข่าว และ DCA แล้ว (การเตือนราคาจากระบบเดิมยังทำงาน)'
+        return text+'สำหรับรีวิว ข่าว และ DCA ของทุกพอร์ตแล้ว (การเตือนราคาจากระบบเดิมยังทำงาน)'
     if text == 'อัปเดตพอร์ตแล้ว':
         from zoneinfo import ZoneInfo
         store.set('dca_updated', now.astimezone(ZoneInfo('Asia/Bangkok')).strftime('%Y-%m'))
@@ -134,7 +153,7 @@ def command(settings, store, event_id, text, now=None):
                 if live.get('gain_usd') is not None and live.get('gain_pct') is not None else 'กำไร/ขาดทุน: รอยืนยันต้นทุนรวมจากโบรกเกอร์')
         lines = ['มาดูพอร์ตของเรากันครับ', '', f"มูลค่าหุ้นรวม ${live['total_usd']:,.2f}",gain, '', 'สัดส่วนตอนนี้']
         lines += [f"{h['symbol']} ${h.get('live_value_usd', 0):,.2f} · {h.get('live_weight_pct', 0):.1f}%" for h in portfolio['holdings']]
-        lines += ['', 'พอร์ต '+catalog.selected()['name'], 'ราคาอัปเดตถึง '+thai_time(live['oldest_quote_as_of'])]
+        lines += ['', 'ราคาอัปเดตถึง '+thai_time(live['oldest_quote_as_of'])]
         if live.get('stale'):
             lines.append('ราคาบางตัวยังเก่าครับ กำลังรอรอบอัปเดต')
         if live.get('cost_estimated'):
@@ -179,6 +198,18 @@ def command(settings, store, event_id, text, now=None):
                 +f'พิมพ์ ข่าว {symbol} เพื่อดูข่าวที่คัดไว้')
     if text.startswith('ข่าว'):
         wanted = text.removeprefix('ข่าว').strip().upper()
+        if not wanted and len(catalog.read()['portfolios'])>1:
+            from dataclasses import replace
+            combined = {}
+            for p in catalog.read()['portfolios']:
+                try:
+                    data = report_data(replace(settings,portfolio_id=p['id']),now)
+                except (ValueError,OSError,KeyError):
+                    continue
+                for item in data.get('news',[]):
+                    identity = item.get('source_id') or (item['symbol'],item['title'],item['published_at'])
+                    combined[identity] = item
+            report['news'] = sorted(combined.values(),key=lambda item:item['published_at'],reverse=True)
         items = [n for n in report['news'] if not wanted or n['symbol'] == wanted][:5]
         if not items:
             return f'รอบนี้ยังไม่มีข่าวที่คัดไว้ครับ สรุปตลาดและหุ้นที่ติดตามจะส่งทุกวันจันทร์ {settings.manager_delivery_hour:02d}:00 น. ไทย และตามเก็บเมื่อเปิดเครื่อง'

@@ -62,11 +62,34 @@ def render(settings,store,key,items,now):
     from app.research_context import context, for_model
     from app.scheduled_briefs import interpret
     from app.web_news import news_reference
+    from dataclasses import replace
+    from app.portfolio_catalog import PortfolioCatalog
     enriched=[add_excerpt(settings,item) if item['source_id'].startswith('sec:') else item for item in items]
-    report=report_data(settings,now)
     symbols={i['symbol'] for i in items}
-    evidence=context(settings,report,symbols,now)
-    payload=dict(events=enriched,context=evidence)
+    catalog = PortfolioCatalog(settings)
+    related = []
+    for p in sorted(catalog.read()['portfolios'],key=lambda p:-p['priority']):
+        scoped = replace(settings,portfolio_id=p['id'])
+        if 'MARKET' in symbols or symbols & {s.symbol for s in scoped.stocks(selected=True)}:
+            related.append((p,scoped))
+    # Use one interpretation for a shared event, with separate holdings/plans
+    # for every affected portfolio. The currently open chat cannot hide another.
+    evidence = {}
+    affected = []
+    for p, scoped in related:
+        try:
+            current = context(scoped,report_data(scoped,now),symbols,now)
+        except (ValueError, OSError, KeyError) as exc:
+            log.warning('Research context unavailable for %s (%s)',p['id'],type(exc).__name__)
+            affected.append(dict(id=p['id'],name=p['name'],context_unavailable=True))
+            continue
+        if not evidence:
+            evidence = current
+        affected.append(dict(id=p['id'],name=p['name'],context={k:v for k,v in current.items()
+            if k not in {'news','annual_fundamentals','limitations'}}))
+    if not related:
+        evidence=context(settings,report_data(settings,now),symbols,now)
+    payload=dict(events=enriched,context=evidence,affected_portfolios=affected)
     answer=interpret(settings,key,for_model(payload),now,
         'สรุปเหตุการณ์ใหม่ที่ตรวจพบเป็นไทย check_more=เกิดอะไรขึ้นและหลักฐานจากสำนัก/วันที่ '
         'risks=เกี่ยวข้องกับหุ้น/เหตุผลถือและพอร์ตเราอย่างไร options=สิ่งที่ควรทำหรือรออย่างมีเงื่อนไข '
@@ -74,7 +97,9 @@ def render(settings,store,key,items,now):
         'เอกสาร SEC อาจอ่านเพียงต้นเอกสารหรือ metadata ห้ามอ้างว่าอ่านทั้งฉบับหรือพบงบดี/แย่ถ้าไม่มีหลักฐาน '
         'งบที่แนบเป็นรายปีที่เก็บไว้ อาจยังไม่ใช่งบฉบับใหม่ที่เพิ่งพบ '
         'ห้ามเดาตัวเลขหรือคำนวณเงินใหม่เอง ห้ามกำหนดวงเงินเพิ่มเพราะไม่ได้ระบุงบ '
-        'เสนอเงื่อนไขทบทวน DCA หรือการถือได้ แต่ไม่เปลี่ยนแผนเอง')
+        'เสนอเงื่อนไขทบทวน DCA หรือการถือได้ แต่ไม่เปลี่ยนแผนเอง '
+        'affected_portfolios เป็นพอร์ตแยกกัน ระบุชื่อพอร์ตเมื่อกล่าวถึงผลกระทบ '
+        'ไม่รวมจำนวนหุ้น เงิน DCA หรือคำแนะนำของต่างพอร์ตเข้าด้วยกัน',private=True)
     if answer:
         message='มีเรื่องใหม่ที่ควรดูครับ\n\n'+answer['check_more']+'\n\nเกี่ยวกับพอร์ตเรา\n'+answer['risks']+'\n\nสิ่งที่พิจารณาต่อ\n'+answer['options']
     else:
@@ -87,6 +112,8 @@ def render(settings,store,key,items,now):
         ZoneInfo('Asia/Bangkok')).strftime('%d/%m/%Y %H:%M น.') for i in items)
     heading = 'ตามเก็บข่าวที่ยังไม่ได้แจ้งครับ\n' if delayed else ''
     message = heading+'เผยแพร่ข่าว (เวลาไทย)\n'+dates+'\n\n'+message
+    if len(catalog.read()['portfolios'])>1 and related:
+        message = 'เกี่ยวข้องกับพอร์ต: '+' / '.join(p['name'] for p,_ in related)+'\n\n'+message
     message+='\n\nข่าวเว็บอ่านจากหัวข่าว; เอกสาร SEC อ่านได้เฉพาะส่วนที่แนบ ไม่รับรองว่าครบทุกประเด็น'
     message+='\n'+'\n'.join(news_reference(i) for i in enriched)
     store.save_brief(key,'research_alert',now.timestamp(),message,payload,bool(answer))

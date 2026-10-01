@@ -131,15 +131,15 @@ class LineNotifier(Notifier):
     channel = "line"
 
     def __init__(self, settings: Settings):
+        self.settings = settings
         self.token = settings.line_token
         self.recipient = settings.line_user_id
         self.timeout = settings.http_timeout
 
     def reply(self, message: str, reply_token: str) -> None:
         messages = line_messages(message)
-        messages[-1]['quickReply'] = {'items': [{'type': 'action', 'action': {
-            'type': 'message', 'label': label, 'text': label}}
-            for label in ('วันนี้', 'พอร์ต', 'แผนลงทุน', 'หุ้น', 'ข่าว', 'สัปดาห์', 'เดือน', 'DCA', 'อัปเดต')]}
+        from app.line_portfolios import quick_replies
+        messages[-1]['quickReply'] = quick_replies(self.settings)
         try:
             response = requests.post('https://api.line.me/v2/bot/message/reply',
                 headers={'Authorization': f'Bearer {self.token}'},
@@ -151,6 +151,8 @@ class LineNotifier(Notifier):
 
     def send(self, message: str, retry_key: str, recipient: str) -> None:
         messages = line_messages(message)
+        from app.line_portfolios import quick_replies
+        messages[-1]['quickReply'] = quick_replies(self.settings, dynamic=False)
         try:
             response = requests.post("https://api.line.me/v2/bot/message/push",
                 headers={"Authorization": f"Bearer {self.token}", "X-Line-Retry-Key": retry_key},

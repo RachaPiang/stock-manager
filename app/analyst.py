@@ -32,9 +32,16 @@ def evidence_text(payload: dict) -> str:
         lines.append('พอร์ตที่ติดตามหุ้นนี้: '+' / '.join(payload['tracked_in']))
     context = payload.get('decision_context', {})
     holding = next((h for h in context.get('holdings', []) if h['symbol']==payload['symbol']),None)
-    if holding and holding.get('live_day_change_usd') is not None:
+    affected = payload.get('affected_portfolios', [])
+    if len(affected)>1:
+        for p in affected:
+            owned = p.get('context', {}).get('holding') or {}
+            change = owned.get('live_day_change_usd')
+            if change is not None:
+                lines.append(f"{p['name']} · ผลต่อหุ้นนี้วันนี้ ${change:+,.2f}")
+    elif holding and holding.get('live_day_change_usd') is not None:
         lines.append(f"ผลต่อมูลค่าหุ้นที่เราถือวันนี้ ${holding['live_day_change_usd']:+,.2f}")
-    if holding and holding.get('live_weight_pct') is not None and context.get('portfolio_prices_complete'):
+    if len(affected)<=1 and holding and holding.get('live_weight_pct') is not None and context.get('portfolio_prices_complete'):
         lines.append(f"น้ำหนักในพอร์ตตามราคาที่บันทึก {holding['live_weight_pct']:.2f}%")
     return "\n".join(lines)
 

@@ -39,11 +39,16 @@ def schedule(settings, store, now):
     from dataclasses import replace
     from app.portfolio_catalog import PortfolioCatalog
     from app.portfolio_scope import ScopedStore
-    for p in PortfolioCatalog(settings).read()['portfolios']:
-        _schedule_single(replace(settings, portfolio_id=p['id']), ScopedStore(store,p['id']), now)
+    entries = PortfolioCatalog(settings).read()['portfolios']
+    for index, p in enumerate(entries, 1):
+        try:
+            _schedule_single(replace(settings, portfolio_id=p['id']), ScopedStore(store,p['id']), now,
+                             label=p['name'] if len(entries)>1 else '', index=index)
+        except (ValueError, OSError, KeyError) as exc:
+            log.warning('DCA schedule unavailable for portfolio %s (%s); continuing others', p['id'], type(exc).__name__)
 
 
-def _schedule_single(settings, store, now):
+def _schedule_single(settings, store, now, *, label='', index=1):
     """No AI or stock API calls here. Send saved, bounded changes only."""
     if settings.mock_mode or store.get('paused') == '1':
         return
@@ -67,6 +72,9 @@ def _schedule_single(settings, store, now):
         enabled_day = max(enabled_day,confirmed) if enabled_day else confirmed
     latest_due = max((due for _, _, due in candidates if due and due < local.date()), default=None)
     at = now.timestamp()
+    from app.line_portfolios import portfolio_heading
+    update_hint = (f'พิมพ์ เลือกพอร์ต {index} แล้วกด อัปเดต เพื่อกรอกยอดของพอร์ตนี้' if label else
+                   'พิมพ์ อัปเดต เพื่อกรอกยอดจริง')
     for year, month, due in candidates:
         cycle = f'{year}-{month:02d}'
         from calendar import monthrange
@@ -85,20 +93,20 @@ def _schedule_single(settings, store, now):
         if (not updated and ready <= now < execution_ready+timedelta(days=settings.manager_catchup_days)):
             prefix = (f"รอบ DCA วันที่ {plan['day']} ครับ" if local.date() == calendar_day else
                       f"ตามเก็บเตือน DCA รอบ {cycle} ที่ยังไม่ได้แจ้งครับ")
-            if settings.portfolio_id not in {'','main'}:
-                prefix = 'พอร์ต '+profile.get('portfolio_name',settings.portfolio_id)+'\n'+prefix
+            if label:
+                prefix = portfolio_heading(label)+'\n'+prefix
             store.enqueue('dca:'+cycle,
                           prefix+f" · ตามแผน {plan['monthly_total']:,.0f} {plan['currency']} · ตัวละ {plan['per_stock']:,.0f} {plan['currency']}\n"
                           'ตรวจเงินพร้อมและสถานะ Auto DCA ใน Dime; หากตลาดปิด โบรกเกอร์อาจเลื่อนไปวันทำการ\n'
-                          'หลังรายการสำเร็จ พิมพ์ อัปเดต เพื่อกรอกยอดจริง ระบบนี้ไม่ได้สั่งซื้อให้',
+                          'หลังรายการสำเร็จ '+update_hint,
                           at, settings.manager_push_limit, scheduled_for=ready.timestamp())
         if (due and due == latest_due and not updated and now >= datetime.combine(
                 due+timedelta(days=1), clock_time(settings.manager_delivery_hour), BANGKOK)
                 and now < execution_ready+timedelta(days=settings.manager_catchup_days+1)):
-            label = 'พอร์ต '+profile.get('portfolio_name',settings.portfolio_id)+'\n' if settings.portfolio_id not in {'','main'} else ''
+            heading = portfolio_heading(label)+'\n' if label else ''
             store.enqueue('update:'+cycle,
-                          label+'ตรวจรายการ DCA สำเร็จหรือยังครับ? ถ้าซื้อแล้ว อัปเดตจำนวนหุ้นและต้นทุนจาก Dime เพื่อให้มูลค่าและกำไรพอร์ตถูกต้อง\n'
-                          'พิมพ์ อัปเดต เพื่อดูขั้นตอน', at, settings.manager_push_limit,
+                          heading+'ตรวจรายการ DCA สำเร็จหรือยังครับ? ถ้าซื้อแล้ว อัปเดตจำนวนหุ้นและต้นทุนจาก Dime เพื่อให้มูลค่าและกำไรพอร์ตถูกต้อง\n'
+                          +update_hint, at, settings.manager_push_limit,
                           scheduled_for=datetime.combine(due+timedelta(days=1), clock_time(settings.manager_delivery_hour), BANGKOK).timestamp())
     # Close reports and weekly news run in the independent research worker.
 
