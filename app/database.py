@@ -165,10 +165,16 @@ class Database:
         if not settings.alert_escalation or indicators.daily_change_pct <= -settings.price_drop_pct:
             return []
         day = snapshot.session_date.isoformat()
-        previous = self.connection.execute('''SELECT e.rule FROM events e JOIN notifications n ON n.id=e.notification_id
+        previous = self.connection.execute('''SELECT e.rule,n.payload FROM events e JOIN notifications n ON n.id=e.notification_id
             WHERE e.symbol=? AND e.event_date=? AND e.rule IN ('price_drop_level2','price_drop_level3')
             AND n.status='accepted' ORDER BY e.rule DESC LIMIT 1''', (snapshot.symbol, day)).fetchone()
         if not previous:
+            return []
+        try:
+            old_change = json.loads(previous['payload'])['indicators']['daily_change_pct']
+            if indicators.daily_change_pct <= float(old_change):
+                return []  # Widening a user threshold is not an actual price recovery.
+        except (ValueError, TypeError, KeyError):
             return []
         return [Event(f'{snapshot.source}:{snapshot.symbol}:price_drop_recovery:{day}', snapshot.symbol,
             'price_drop_recovery', day, 'ราคาฟื้นกลับเหนือเกณฑ์เตือนรายวัน',

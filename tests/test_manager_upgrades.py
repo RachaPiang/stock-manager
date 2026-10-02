@@ -38,7 +38,7 @@ def test_escalation_bypasses_cooldown_but_dedupes_and_never_regresses(snapshot, 
         for change in (-5, -10, -15):
             events = evaluate(snapshot, neutral(change), Stock('META'), settings)
             assert db.eligible(events, now, 24) == events
-            key = db.enqueue(events, {}, 'console', 'local', now)
+            key = db.enqueue(events, {'indicators': {'daily_change_pct': change}}, 'console', 'local', now)
             db.finish(key, 'accepted', now)
             assert not db.eligible(events, now + timedelta(days=5), 24)
         # Milder, previously unobserved levels are also blocked after a jump.
@@ -60,6 +60,17 @@ def test_large_first_move_suppresses_later_milder_threshold(snapshot, settings, 
         db.finish(key, 'accepted', now)
         assert not db.eligible(evaluate(snapshot, neutral(-7), Stock('META'), settings), now, 24)
         assert evaluate(snapshot, neutral(-16), Stock('META'), replace(settings, alert_escalation=False))[0].rule == 'price_drop'
+    finally:
+        db.close()
+
+
+def test_widening_threshold_does_not_fake_price_recovery(snapshot, settings, now):
+    db = Database(settings.database_path, 'mock')
+    try:
+        events = evaluate(snapshot, neutral(-10), Stock('META'), settings)
+        key = db.enqueue(events, {'indicators': {'daily_change_pct': -10}}, 'console', 'local', now)
+        db.finish(key, 'accepted', now)
+        assert not db.price_recovery(snapshot, neutral(-18), replace(settings, price_drop_pct=20))
     finally:
         db.close()
 
