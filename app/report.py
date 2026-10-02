@@ -11,6 +11,7 @@ from app.config import ROOT, Settings, load_watchlist
 from app.fetcher import DailyBar, DataError, Snapshot, NY
 from app.indicators import calculate
 from app.rules import evaluate
+from app.alert_policy import effective_settings
 from app.market import is_open, EARLY, completed_session, session_close
 from app.market_state import DAILY_LIMIT
 from app.intraday import previous_session_day
@@ -161,7 +162,8 @@ def report_data(settings: Settings, now: datetime | None = None) -> dict:
             else:
                 indicators = calculate([b.close for b in bars], snapshot.price, snapshot.previous_close, stock.target_price)
                 item.update(stale=False, note="", indicators=indicators.to_dict(),
-                            signals=[e.title for e in evaluate(snapshot, indicators, stock, settings)])
+                            signals=[e.title for e in evaluate(snapshot, indicators, stock,
+                                effective_settings(settings, stock.symbol, selected=True))])
             if completed and snapshot.as_of < session_close(completed):
                 item.update(stale=True, note='ข้อมูลยังไม่ถึงราคาปิดรอบล่าสุด · รอตามเก็บหลังเปิดเครื่อง')
             elif is_open(now) and now-snapshot.as_of > timedelta(minutes=15):

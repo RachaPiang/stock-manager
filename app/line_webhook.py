@@ -214,6 +214,7 @@ def process_one(settings, store, notifier, reply_tokens, now=None):
 
 
 def main():
+    from app.system_status import heartbeat
     from logging.handlers import RotatingFileHandler
     from app.config import ROOT
     from waitress import serve
@@ -225,7 +226,7 @@ def main():
         settings = Settings.from_env()
         if settings.mock_mode or settings.notifier_mode != 'line' or not settings.line_token:
             raise ValueError('Live LINE configuration required')
-        with run_lock(settings.database_path.parent/'line-manager.lock'):
+        with run_lock(settings.database_path.parent/'line-manager.lock'), heartbeat(settings.database_path.parent, 'line') as pulse:
             store = ManagerStore(settings.database_path.parent/'line-manager.sqlite3')
             tokens = {}
             app = create_app(settings, store, tokens)
@@ -235,17 +236,22 @@ def main():
                 store.set('reports-enabled-at', datetime.now(UTC).isoformat())
             stop = threading.Event()
             from app.line_tunnel import maintain
-            threading.Thread(target=maintain, args=(settings, stop), daemon=True, name='line-tunnel').start()
+            threading.Thread(target=maintain, args=(settings, stop, pulse), daemon=True, name='line-tunnel').start()
             def worker():
-                notifier, last_schedule = LineNotifier(settings), 0
+                notifier, last_schedule, last_pulse = LineNotifier(settings), 0, 0
                 while not stop.is_set():
                     try:
                         now = datetime.now(UTC)
                         process_one(settings, store, notifier, tokens)
+                        if now.timestamp() - last_pulse >= 30:
+                            pulse.mark('รับคำสั่งและส่ง LINE', 'ok', 'พร้อมรับข้อความ · ส่งตามคิวและโควตา')
+                            last_pulse = now.timestamp()
                         if now.timestamp()-last_schedule >= 60:
                             last_schedule = now.timestamp()
                             schedule(settings, store, now)
+                            pulse.mark('สรุปพอร์ตและเตือน DCA', 'ok', 'ตรวจเวลานัดหมายแล้ว')
                     except Exception as exc:
+                        pulse.mark('รับคำสั่งและส่ง LINE', 'error', 'งานล่าสุดไม่สำเร็จ ดูบันทึกระบบ')
                         log.error('Manager worker error (%s)', type(exc).__name__)
                     stop.wait(1)
             threading.Thread(target=worker, daemon=True, name='line-manager').start()
@@ -254,12 +260,18 @@ def main():
                 from app.research_monitor import run_due as monitor_due
                 while not stop.is_set():
                     try:
+                        pulse.mark('รีวิวตามเวลา', 'busy')
                         run_due(settings, store)
+                        pulse.mark('รีวิวตามเวลา', 'ok', 'ตรวจคิวแล้ว · ไม่ได้เรียก AI ทุกครั้ง')
                     except Exception as exc:
+                        pulse.mark('รีวิวตามเวลา', 'error', 'งานล่าสุดไม่สำเร็จ')
                         log.error('Scheduled brief failed (%s); retry next tick', type(exc).__name__)
                     try:
+                        pulse.mark('ข่าวและงบ SEC', 'busy')
                         monitor_due(settings,store)
+                        pulse.mark('ข่าวและงบ SEC', 'ok', 'ตรวจคิวแล้ว · ดึงข้อมูลเมื่อถึงรอบ')
                     except Exception as exc:
+                        pulse.mark('ข่าวและงบ SEC', 'error', 'งานล่าสุดไม่สำเร็จ')
                         log.error('Research monitor failed (%s)',type(exc).__name__)
                     stop.wait(60)
             threading.Thread(target=research_worker, daemon=True, name='line-research').start()

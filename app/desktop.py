@@ -4,7 +4,7 @@ import queue
 import subprocess
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from dotenv import dotenv_values
 
@@ -67,18 +67,31 @@ class Desktop:
         self.root = root
         apply_theme(root)
         root.title('Stock Manager · ศูนย์ควบคุม')
-        root.geometry('1000x740')
-        root.minsize(850, 650)
+        root.geometry('1000x800')
+        root.minsize(900, 700)
         self.events = queue.Queue()
         self.busy = False
         self.children = {}
-        outer = ttk.Frame(root, padding=24)
+        self.status_events = queue.Queue()
+        self.monitor_window = None
+        self.live_status = {name: tk.StringVar(value='○ กำลังตรวจสถานะ…') for name in ('line', 'market')}
+        self.live_detail = tk.StringVar(value='สถานะนี้อ่านจากเครื่อง ไม่ใช้เครดิต API หรือ AI')
+        outer = ttk.Frame(root, padding=18)
         outer.pack(fill='both', expand=True)
         ttk.Label(outer, text='Stock Manager', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(outer, text='พอร์ตของคุณ ข่าว และผู้ช่วย LINE — จัดการจากที่เดียว').pack(anchor='w', pady=(0, 14))
+        ttk.Label(outer, text='พอร์ตของคุณ ข่าว และผู้ช่วย LINE — จัดการจากที่เดียว').pack(anchor='w', pady=(0, 6))
+        live = ttk.Frame(outer, padding=(12, 4))
+        live.pack(fill='x', pady=(0, 4))
+        self.live_labels = []
+        for name in ('line', 'market'):
+            label = ttk.Label(live, textvariable=self.live_status[name])
+            label.pack(side='left', padx=(0, 24))
+            self.live_labels.append((name, label))
+        ttk.Button(live, text='มอนิเตอร์เล็ก', command=self.small_monitor).pack(side='right')
+        ttk.Label(outer, textvariable=self.live_detail, wraplength=940).pack(anchor='w', pady=(0, 4))
         tabs = ttk.Notebook(outer)
         tabs.pack(fill='both', expand=True)
-        home = ttk.Frame(tabs, padding=20)
+        home = ttk.Frame(tabs, padding=14)
         settings = ttk.Frame(tabs, padding=16)
         tools = ttk.Frame(tabs, padding=20)
         tabs.add(home, text='หน้าหลัก')
@@ -92,18 +105,22 @@ class Desktop:
             ('จัดการพอร์ต / หุ้น / DCA', lambda: self.window('app.portfolio_manager')),
             ('อัปเดตจำนวนหุ้นและต้นทุน', lambda: self.window('app.portfolio_editor')),
             ('คำอธิบายพอร์ตและหุ้นสำหรับ AI', lambda: self.window('app.notes_editor')),
+            ('สุขภาพบริษัทและเหตุผลที่ถือ', lambda: self.window('app.company_health')),
+            ('ตั้งค่าแจ้งเตือนรายหุ้น', lambda: self.window('app.alert_editor')),
         ])
-        ttk.Label(home, text='กราฟเปิดในเบราว์เซอร์เดิม ส่วนการแก้พอร์ตเปิดเป็นหน้าต่างแบบเดิม', wraplength=820).pack(anchor='w', pady=(0, 16))
+        ttk.Label(home, text='กราฟเปิดในเบราว์เซอร์เดิม ส่วนการแก้พอร์ตเปิดเป็นหน้าต่างแบบเดิม', wraplength=820).pack(anchor='w', pady=(0, 8))
         ttk.Label(home, text='ระบบเบื้องหลัง', style='Section.TLabel').pack(anchor='w')
         self.buttons(home, [
             ('เปิดระบบ + เริ่มพร้อม Windows', lambda: self.script('start_stock_manager.ps1')),
             ('หยุดระบบ + ปิดเริ่มอัตโนมัติ', self.stop),
         ])
-        ttk.Label(home, text='ปิดหน้าต่างแอปได้ บอตและตัวติดตามที่เปิดไว้จะทำงานต่อ\nปุ่มหยุดระบบจะหยุดทั้ง LINE และการติดตามตลาด พร้อมปิดการเริ่มอัตโนมัติ', wraplength=820).pack(anchor='w', pady=(0, 16))
+        ttk.Label(home, text='ปิดหน้าต่างแอปได้ บอตและตัวติดตามที่เปิดไว้จะทำงานต่อ\nปุ่มหยุดระบบจะหยุดทั้ง LINE และการติดตามตลาด พร้อมปิดการเริ่มอัตโนมัติ', wraplength=820).pack(anchor='w', pady=(0, 8))
         self.buttons(home, [('รีเฟรชราคาและกราฟ', lambda: self.confirm_job('อัปเดตราคาผ่าน API และอาจส่งแจ้งเตือนตามกฎที่ตั้งไว้', 'view')),
                             ('ตรวจสถานะระบบ', self.inspect)])
         ttk.Label(tools, text='เรียกเมื่อจำเป็น', style='Section.TLabel').pack(anchor='w')
         actions = [
+            ('สำรองข้อมูลทั้งหมด', self.backup),
+            ('กู้คืนข้อมูลจากไฟล์สำรอง', self.restore),
             ('ตรวจการตั้งค่า (ไม่ต่ออินเทอร์เน็ต)', lambda: self.job('ตรวจการตั้งค่า', ['doctor'])),
             ('ทดสอบการเชื่อมต่อ API', lambda: self.confirm_job('ติดต่อ API เพื่อตรวจการเชื่อมต่อ อาจใช้โควตา', 'doctor', '--online')),
             ('ทดสอบ AI หนึ่งครั้ง', lambda: self.confirm_job('เรียก Codex จริงหนึ่งครั้ง ใช้โควตา AI', 'test-codex')),
@@ -118,11 +135,12 @@ class Desktop:
         self.buttons(tools, actions, columns=2)
         self.make_settings(settings)
         root.after(150, self.poll)
+        self.refresh_live()
         root.protocol('WM_DELETE_WINDOW', self.close)
 
     def buttons(self, parent, actions, columns=2):
         row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(6, 12))
+        row.pack(fill='x', pady=(4, 8))
         for n, (label, command) in enumerate(actions):
             row.columnconfigure(n % columns, weight=1)
             ttk.Button(row, text=label, command=command).grid(row=n // columns, column=n % columns, sticky='ew', padx=(0, 10), pady=5)
@@ -143,7 +161,7 @@ class Desktop:
         except OSError:
             messagebox.showerror('เปิดไม่ได้', 'ตรวจสภาพแวดล้อม Python ของโปรเจกต์', parent=self.root)
 
-    def submit(self, label, work):
+    def submit(self, label, work, done=None):
         if self.busy:
             messagebox.showinfo('กำลังทำงาน', 'รอรายการปัจจุบันเสร็จก่อนครับ', parent=self.root)
             return
@@ -152,24 +170,128 @@ class Desktop:
         def task():
             try:
                 result = work()
-                self.events.put((label, result, None))
+                self.events.put((label, result, None, done))
             except Exception as exc:
-                self.events.put((label, None, type(exc).__name__))
+                from app.database import AlreadyRunning
+                error = ('มีงานกำลังใช้ข้อมูลอยู่ กรุณาหยุดระบบและปิดหน้าต่างแก้พอร์ตก่อน'
+                         if done and isinstance(exc, AlreadyRunning) else
+                         str(exc) if done and isinstance(exc, ValueError) else type(exc).__name__)
+                self.events.put((label, None, error, done))
         threading.Thread(target=task, daemon=True).start()
 
     def poll(self):
         try:
             while True:
-                label, result, error = self.events.get_nowait()
+                label, result, error, done = self.events.get_nowait()
                 self.busy = False
-                self.status.set(label + (' · ไม่สำเร็จ' if error or (result and result.returncode) else ' · เสร็จแล้ว'))
+                self.status.set(label + (' · ไม่สำเร็จ' if error or getattr(result, 'returncode', 0) else ' · เสร็จแล้ว'))
                 if error:
                     messagebox.showerror('ทำรายการไม่สำเร็จ', f'{label}\n{error} — ตรวจบันทึกระบบเพิ่มเติม', parent=self.root)
+                elif done:
+                    done(result)
                 elif result:
                     self.output(label, (result.stdout or '') + (result.stderr or ''))
         except queue.Empty:
             pass
+        try:
+            while True:
+                self.show_live(self.status_events.get_nowait())
+        except queue.Empty:
+            pass
         self.root.after(150, self.poll)
+
+    def refresh_live(self):
+        def read():
+            from app.system_status import local_paths, read_summary
+            try:
+                self.status_events.put(read_summary(local_paths(ROOT)))
+            except Exception:
+                self.status_events.put(None)
+        threading.Thread(target=read, daemon=True).start()
+        self.root.after(5000, self.refresh_live)
+
+    def show_live(self, summary):
+        from app.system_status import thai_time
+        if summary is None:
+            self.live_detail.set('ตรวจสถานะไม่ได้ชั่วคราว จะลองใหม่อัตโนมัติ')
+            return
+        states = {'running': ('● ทำงานอยู่', '#16744a'), 'stopped': ('○ หยุดอยู่', '#607080'),
+                  'stale': ('● ต้องตรวจสอบ', '#9b6415'), 'unknown': ('○ ยังไม่มีสถานะ', '#607080')}
+        for name, label in self.live_labels:
+            worker = summary['workers'][name]
+            text, color = states[worker['state']]
+            self.live_status[name].set(worker['label'] + ' · ' + text)
+            label.configure(foreground=color)
+        pending = summary['pending'] + summary['manager_pending']
+        failed = summary['failed'] + summary['manager_failed']
+        latest = summary['last_run']
+        warning = ' · รอบล่าสุดมีข้อผิดพลาด' if latest and latest[3] else ''
+        self.live_detail.set(f"ราคาล่าสุด {thai_time(summary['last_quote'])} · รอส่ง {pending} · ส่งไม่สำเร็จสะสม {failed}{warning}")
+        lines = ['อัปเดตสถานะทุก 5 วินาที · เวลาไทย', '']
+        compact = []
+        labels = {'ok': 'ตรวจรอบล่าสุดแล้ว', 'busy': 'กำลังทำงาน', 'error': 'งานล่าสุดไม่สำเร็จ', 'waiting': 'กำลังรอ'}
+        for worker in summary['workers'].values():
+            lines.append(worker['label'] + ' · ' + states[worker['state']][0])
+            compact.append(worker['label'] + ' · ' + states[worker['state']][0])
+            for name, job in worker['jobs'].items():
+                lines.append(f"  {name}: {labels.get(job['state'], job['state'])} ({thai_time(job['at'])})")
+                if job.get('detail'):
+                    lines.append('  ' + job['detail'])
+                if name in {'ช่องทาง HTTPS ของ LINE', 'ข่าวและงบ SEC', 'ราคาและกราฟ', 'รีวิวตามเวลา'}:
+                    compact.append(f"  {name}: {labels.get(job['state'], job['state'])}")
+            lines.append('')
+            compact.append('')
+        research = summary.get('research', {})
+        if research:
+            lines.append('ผลแหล่งข่าวและงบล่าสุด · ' + thai_time(research.get('at')))
+            for source, values in research.get('sources', {}).items():
+                bad = sum(v not in {'ok', 'available', 'cached', 'no_recent_news'} for v in values.values())
+                lines.append(f'  {source}: รายการที่ยังไม่พร้อม {bad}/{len(values)}')
+        lines.extend([self.live_detail.get(), '', 'งานข่าวและ AI ทำเมื่อถึงรอบหรือมีเหตุการณ์ ไม่ได้ทำตลอดเวลา',
+                      'สถานะในเครื่องไม่ได้ยืนยันว่า LINE ส่งถึงแล้ว', 'ทดสอบรับส่งจริงได้ด้วยการส่ง “เมนู” หาบอต'])
+        self.monitor_text = '\n'.join(lines)
+        compact.append('ราคาล่าสุด ' + thai_time(summary['last_quote']))
+        compact.append(f'รอส่ง {pending} · ส่งไม่สำเร็จสะสม {failed}')
+        self.monitor_compact = '\n'.join(compact)
+        if self.monitor_window and self.monitor_window.winfo_exists():
+            self.monitor_body.set(self.monitor_compact)
+
+    def small_monitor(self):
+        if self.monitor_window and self.monitor_window.winfo_exists():
+            self.monitor_window.lift()
+            return
+        win = tk.Toplevel(self.root)
+        self.monitor_window = win
+        win.title('Stock Manager · มอนิเตอร์')
+        win.geometry('450x390')
+        win.attributes('-topmost', True)
+        self.monitor_body = tk.StringVar(value=getattr(self, 'monitor_compact', 'กำลังตรวจสถานะ…'))
+        ttk.Label(win, textvariable=self.monitor_body, wraplength=415, padding=16, justify='left').pack(fill='both', expand=True)
+        buttons = ttk.Frame(win)
+        buttons.pack(pady=8)
+        ttk.Button(buttons, text='ดูงานทั้งหมด', command=lambda: self.output('รายละเอียดระบบ', getattr(self, 'monitor_text', 'กำลังตรวจสถานะ'))).pack(side='left', padx=8)
+        ttk.Button(buttons, text='ปิดหน้ามอนิเตอร์', command=win.destroy).pack(side='left')
+
+    def backup(self):
+        from datetime import datetime
+        destination = filedialog.asksaveasfilename(parent=self.root, title='เก็บไฟล์สำรองไว้ในที่ส่วนตัว',
+            initialfile='stock-manager-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '.zip',
+            defaultextension='.zip', filetypes=[('ไฟล์สำรอง', '*.zip')])
+        if not destination:
+            return
+        from app.backup import create_backup
+        self.submit('สำรองข้อมูล', lambda: create_backup(ROOT, destination),
+            lambda count: messagebox.showinfo('สำรองแล้ว', f'เก็บข้อมูล {count} ไฟล์แล้ว\n{destination}\n\nมีข้อมูลพอร์ตส่วนตัว ห้ามเผยแพร่\nไม่รวม API keys ใน .env เก็บไฟล์ .env แยกในที่ปลอดภัย', parent=self.root))
+
+    def restore(self):
+        archive = filedialog.askopenfilename(parent=self.root, title='เลือกไฟล์สำรองของ Stock Manager', filetypes=[('ไฟล์สำรอง', '*.zip')])
+        if not archive:
+            return
+        if not messagebox.askokcancel('กู้คืนข้อมูล', 'หยุดระบบและปิดหน้าต่างแก้พอร์ตก่อน\nข้อมูลที่ตรงกับไฟล์สำรองจะถูกแทนที่ ยอดหุ้นจะย้อนกลับตามไฟล์\nมีสำรองก่อนกู้คืนให้ และยกเลิกคิวเก่าเพื่อไม่ส่ง LINE ซ้ำ\nAPI keys และการเริ่มพร้อม Windows ไม่เปลี่ยน\n\nยืนยันกู้คืน?', parent=self.root):
+            return
+        from app.backup import restore_backup
+        self.submit('กู้คืนข้อมูล', lambda: restore_backup(ROOT, archive),
+            lambda safety: messagebox.showinfo('กู้คืนแล้ว', f'ไฟล์สำรองก่อนกู้คืน:\n{safety}\n\nเปิดระบบใหม่เมื่อตรวจยอดพอร์ตเรียบร้อยแล้ว', parent=self.root))
 
     def output(self, title, text):
         # Suppress configured credentials even if a dependency includes them in errors.

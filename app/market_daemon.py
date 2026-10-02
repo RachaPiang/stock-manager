@@ -6,6 +6,7 @@ from logging.handlers import RotatingFileHandler
 
 from app.config import ROOT, Settings
 from app.database import AlreadyRunning, run_lock
+from app.system_status import heartbeat
 
 
 def configure_logging() -> None:
@@ -45,14 +46,21 @@ def main() -> int:
     notifier = LineNotifier(settings) if settings.notifier_mode == "line" else ConsoleNotifier()
     log.info("Price monitor running quietly; checks align to five-minute slots and obey market/quota guards")
     try:
-        with run_lock(settings.database_path.with_suffix(".market-daemon.lock")):
+        with run_lock(settings.database_path.with_suffix(".market-daemon.lock")), heartbeat(settings.database_path.parent, 'market') as pulse:
             while True:
                 try:
+                    pulse.mark('ราคาและกราฟ', 'busy')
                     result = check(settings, provider, analyst, notifier, scheduled=True)
                     if result["checked"] or result["queued"] or result["sent"]:
                         from app.report import write_report
                         write_report(settings)
+                    pulse.mark('ราคาและกราฟ', 'ok' if not result['errors'] else 'error',
+                               f"ตรวจ {result['checked']} ตัว · ส่ง {result['sent']} รายการ")
+                except AlreadyRunning:
+                    pulse.mark('ราคาและกราฟ', 'waiting', 'มีการตรวจราคาอีกงานอยู่ รอรอบถัดไป')
+                    log.info('Another price check owns the slot; waiting for next cycle')
                 except Exception as exc:
+                    pulse.mark('ราคาและกราฟ', 'error', 'ตรวจไม่สำเร็จ รอลองรอบถัดไป')
                     log.error("Price-monitor cycle failed (%s); retrying next slot", type(exc).__name__)
                 # Align to wall-clock five-minute slots instead of drifting after API calls.
                 wait_seconds = 300 - (int(time.time()) % 300)

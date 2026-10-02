@@ -134,6 +134,23 @@ class Database:
         for event in events:
             if self.connection.execute("SELECT 1 FROM events WHERE event_key=?", (event.key,)).fetchone():
                 continue  # Same daily event stays deduplicated even after cooldown expires.
+            family = event.rule.split('_level')[0]
+            if family in {'price_drop', 'price_rise'} and event.evidence.get('severity_level'):
+                level = event.evidence['severity_level']
+                previous = self.connection.execute('''SELECT e.rule,e.event_date,n.status,n.accepted_at
+                    FROM events e JOIN notifications n ON e.notification_id=n.id
+                    WHERE e.symbol=? AND (e.rule=? OR e.rule IN (?,?))
+                    AND n.status IN ('pending','accepted')''',
+                    (event.symbol, family, family+'_level2', family+'_level3')).fetchall()
+                same_day = [int(r['rule'][-1]) if '_level' in r['rule'] else 1
+                            for r in previous if r['event_date'] == event.event_date]
+                if same_day and max(same_day) >= level:
+                    continue  # A milder reading after a large jump is not new bad news.
+                if same_day and level > max(same_day):
+                    result.append(event)  # A higher level bypasses the same-day cooldown.
+                    continue
+                if any(r['status'] == 'pending' or (r['accepted_at'] and r['accepted_at'] > cutoff) for r in previous):
+                    continue
             recent = self.connection.execute("""
                 SELECT 1 FROM events e JOIN notifications n ON e.notification_id=n.id
                 WHERE e.symbol=? AND e.rule=? AND
@@ -142,6 +159,21 @@ class Database:
             if not recent:
                 result.append(event)
         return result
+
+    def price_recovery(self, snapshot, indicators, settings):
+        """Once per session after an accepted severe decline; only price recovered."""
+        if not settings.alert_escalation or indicators.daily_change_pct <= -settings.price_drop_pct:
+            return []
+        day = snapshot.session_date.isoformat()
+        previous = self.connection.execute('''SELECT e.rule FROM events e JOIN notifications n ON n.id=e.notification_id
+            WHERE e.symbol=? AND e.event_date=? AND e.rule IN ('price_drop_level2','price_drop_level3')
+            AND n.status='accepted' ORDER BY e.rule DESC LIMIT 1''', (snapshot.symbol, day)).fetchone()
+        if not previous:
+            return []
+        return [Event(f'{snapshot.source}:{snapshot.symbol}:price_drop_recovery:{day}', snapshot.symbol,
+            'price_drop_recovery', day, 'ราคาฟื้นกลับเหนือเกณฑ์เตือนรายวัน',
+            dict(change_pct=indicators.daily_change_pct, threshold_pct=-settings.price_drop_pct,
+                 previous_severity=int(previous['rule'][-1]), meaning='Price threshold recovered, not company-risk resolution'))]
 
     def reserve_ai(self, notification_id, symbol, now, daily_limit, stock_limit):
         """Reserve before calling; failed/crashed attempts count. UTC day, persistent across restarts."""

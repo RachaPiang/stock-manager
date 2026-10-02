@@ -128,10 +128,14 @@ def check(settings: Settings, provider: StockProvider, analyst: Analyst, notifie
                                            snapshot.previous_close, stock.target_price)
                     if len(snapshot.bars) < 51:
                         log.warning("%s | only %d daily bars; unavailable indicators skipped", stock.symbol, len(snapshot.bars))
-                    events = evaluate(snapshot, indicators, stock, settings)
+                    from app.alert_policy import effective_settings, policies
+                    rule_settings = effective_settings(settings, stock.symbol)
+                    events = evaluate(snapshot, indicators, stock, rule_settings)
+                    events += db.price_recovery(snapshot, indicators, rule_settings)
                     eligible = db.eligible(events, now, settings.cooldown_hours)
                     if eligible:
                         payload = analysis_payload(snapshot, indicators, eligible)
+                        payload['alert_policies'] = policies(settings, stock.symbol)
                         if snapshot.price_kind == 'daily_close':
                             payload['caught_up_close'] = snapshot.session_date.isoformat()
                         if not settings.mock_mode:

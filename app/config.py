@@ -70,6 +70,7 @@ class Settings:
     rsi_low: float = 30.0
     rsi_high: float = 70.0
     cooldown_hours: float = 24.0
+    alert_escalation: bool = True
     log_level: str = "INFO"
     stock_provider: str = "twelvedata"
     stock_api_key: str = field(default="", repr=False)

@@ -75,6 +75,8 @@ class PortfolioCatalog:
                 raise ValueError('น้ำหนักต้องไม่เกิน 10,000')
             own = set()
             for s in p['stocks']:
+                from app.alert_policy import validate as validate_alerts
+                validate_alerts(s.get('alert_settings', {}))
                 validate_notes(s.get('investment_notes', {}), 'stock')
                 if not SYMBOL.fullmatch(s['symbol']) or s['symbol'] in own:
                     raise ValueError('ชื่อหุ้นไม่ถูกต้องหรือซ้ำในพอร์ต')
@@ -228,6 +230,20 @@ class PortfolioCatalog:
                               'currency':'THB', 'per_stock':amount/count if count else 0, 'enabled':amount>0,
                               'plan_as_of':datetime.now(UTC).isoformat()}
                 atomic_json(path, raw, backup=True)
+
+    def save_alerts(self, identity, symbol, alerts, *, expected=None):
+        from app.alert_policy import validate, FIELDS
+        validate(alerts)
+        effective = {key: alerts.get(key, getattr(self.settings, key)) for key in FIELDS}
+        if effective['rsi_low'] >= effective['rsi_high']:
+            raise ValueError('RSI ต่ำต้องน้อยกว่า RSI สูง รวมค่าเริ่มต้นที่ใช้ด้วย')
+        def action(value):
+            p = self.entry(identity, value)
+            stock = next((s for s in p['stocks'] if s['symbol'] == symbol), None)
+            if stock is None:
+                raise ValueError('ไม่พบหุ้นนี้ กรุณาโหลดข้อมูลใหม่')
+            stock['alert_settings'] = dict(alerts)
+        self._change(action, expected)
 
     def save_notes(self, identity, notes, *, symbol=None, expected=None):
         from app.investment_notes import validate_notes

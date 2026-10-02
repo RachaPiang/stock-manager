@@ -22,10 +22,10 @@ def create_memo(settings, store, report, text, now):
     basis = hashlib.sha256(json.dumps([portfolio, budget], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     from app.fundamentals import collect
     fundamentals = {} if settings.mock_mode else collect(settings, [h['symbol'] for h in portfolio['holdings']], now)
-    evidence = {symbol: {k: value.get(k) for k in ('metrics', 'status', 'fetched_at')}
+    evidence = {symbol: {k: value.get(k) for k in ('metrics', 'latest_quarter', 'status', 'fetched_at')}
                 for symbol, value in fundamentals.items()}
     basis = hashlib.sha256((basis+json.dumps(evidence, sort_keys=True)).encode()).hexdigest()
-    key = 'decision:v3:'+now.astimezone(UTC).strftime('%Y-%m-%dT%H')+':'+basis[:20]
+    key = 'decision:v4:'+now.astimezone(UTC).strftime('%Y-%m-%dT%H')+':'+basis[:20]
     saved = store.brief(key)
     if saved:
         return saved['message']
@@ -45,10 +45,11 @@ def create_memo(settings, store, report, text, now):
                    technical_context=[{'symbol': s['symbol'], 'indicators': s.get('indicators'),
                                        'stale': s.get('stale', True)} for s in report.get('stocks', [])])
     # No large reference URLs in the model prompt; attach the real sources below.
-    compact = json.loads(json.dumps(payload))
-    for company in compact['fundamentals'].values():
-        for metric in company.get('metrics', {}).values():
-            metric.pop('source_url', None)
+    from app.company_checks import checks
+    payload['thesis_checks'] = {h['symbol']: checks(fundamentals.get(h['symbol'], {}), h.get('investment_notes', {}), now)
+                                for h in portfolio['holdings']}
+    from app.research_context import for_model
+    compact = for_model(payload)
     answer = None
     if not settings.mock_mode:
         from app.scheduled_briefs import interpret
@@ -58,7 +59,8 @@ def create_memo(settings, store, report, text, now):
             'options=แผนมีเงื่อนไขว่าควรเพิ่ม รอ ลด หรือศึกษาอะไรต่อ '
             'เสนอแก้แผนเดิมได้หากมีเหตุผล แต่ระบุเป็นข้อเสนอที่ยังไม่ได้นำไปใช้ '
             'ห้ามใช้ราคาลงหรือกำไรของเจ้าของเป็นหลักฐานว่าหุ้นถูก/แพง '
-            'ข้อมูล SEC เป็นงบรายปี ไม่ใช่งบไตรมาสล่าสุดหรือ TTM ระบุวันที่งบเมื่ออ้าง '
+            'แยกงบรายปี metrics กับงบไตรมาสเดียว latest_quarter ระบุวันสิ้นสุดงบเมื่ออ้าง ไม่ใช่ TTM '
+            'thesis_checks เป็นข้อสังเกตจากโค้ด ประกอบกับเหตุผลและเงื่อนไขเจ้าของ ไม่ใช่คำตัดสินว่าเหตุผลถือผิด '
             'ห้ามฟันธงซื้อทันทีหรือคัดหุ้นใหม่จากความจำเมื่อไม่มีข้อมูลมูลค่าและงบปัจจุบัน '
             'ไม่มีงบลงทุนเพิ่มห้ามกำหนดจำนวนเงินหรือเปอร์เซ็นต์เงินสำรอง '
             'มีงบเพิ่มให้เสนอทางเลือกแบ่งจังหวะตามงบได้ ห้ามแปลงบาทเป็น USD หรือ %พอร์ตเพราะไม่มี FX '
@@ -71,7 +73,8 @@ def create_memo(settings, store, report, text, now):
         message += ('\n\nรอบนี้ AI ยังไม่พร้อม ผมแสดงข้อมูลที่ตรวจได้ให้ก่อนครับ '
                     'ยังไม่มีข้อเสนอเปลี่ยนแผน DCA เดิม')
     available = sum(bool(f.get('metrics')) for f in fundamentals.values())
-    message += f'\n\nงบรายปีที่อ่านได้ {available}/{len(portfolio["holdings"])} บริษัท · ข่าวที่คัดไว้ {len(news)} รายการ'
+    quarterly = sum(bool(f.get('latest_quarter')) for f in fundamentals.values())
+    message += f'\n\nงบรายปีที่อ่านได้ {available}/{len(portfolio["holdings"])} บริษัท · งบไตรมาสเดียว {quarterly} บริษัท · ข่าวที่คัดไว้ {len(news)} รายการ'
     if any(f.get('status') == 'not_configured' for f in fundamentals.values()):
         message += '\nการดึงงบ SEC ยังรอตั้งค่าอีเมลติดต่อ จึงยังไม่มีงบใหม่ประกอบคำแนะนำครับ'
     if not portfolio.get('live', {}).get('complete') or portfolio.get('live', {}).get('stale'):
@@ -91,9 +94,11 @@ def create_memo(settings, store, report, text, now):
         if len(seen) >= 10:
             break
     for symbol, company in fundamentals.items():
-        metric = next((m for m in company.get('metrics', {}).values() if m.get('source_url')), None)
+        quarter = company.get('latest_quarter')
+        metrics = quarter['metrics'] if quarter else company.get('metrics', {})
+        metric = next((m for m in metrics.values() if m.get('source_url')), None)
         if metric:
-            message += '\n'+news_reference(dict(symbol=symbol, title='งบรายปีสิ้นสุด '+metric['end'],
+            message += '\n'+news_reference(dict(symbol=symbol, title=('งบไตรมาสสิ้นสุด ' if quarter else 'งบรายปีสิ้นสุด ')+metric['end'],
                 source_name='SEC EDGAR', source_url=metric['source_url'], published_at=metric['filed']))
     store.save_brief(key, 'decision', now.timestamp(), message, payload, bool(answer))
     return message

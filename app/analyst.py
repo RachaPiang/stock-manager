@@ -31,6 +31,9 @@ def evidence_text(payload: dict) -> str:
     elif payload.get('tracked_in'):
         lines.append('พอร์ตที่ติดตามหุ้นนี้: '+' / '.join(payload['tracked_in']))
     context = payload.get('decision_context', {})
+    level = max((e['evidence'].get('severity_level', 1) for e in payload['events']), default=1)
+    if level > 1:
+        lines.append(f'ระดับแจ้งเตือน {level}/3 · แรงขึ้นจากเกณฑ์เริ่มต้น ไม่ใช่คะแนนความเสี่ยงบริษัท')
     holding = next((h for h in context.get('holdings', []) if h['symbol']==payload['symbol']),None)
     affected = payload.get('affected_portfolios', [])
     if len(affected)>1:
@@ -57,7 +60,9 @@ class TemplateAnalyst(Analyst):
     """Deterministic local explanation, explicitly labelled as not an AI call."""
     def summarize(self, payload: dict) -> str:
         rules = {e["rule"] for e in payload["events"]}
-        if rules & {"price_drop", "rsi_low", "below_target", "sma_cross_down"}:
+        if 'price_drop_recovery' in rules:
+            option = 'ราคากลับเหนือเกณฑ์เตือนแล้วครับ แต่ไม่ได้ยืนยันว่าความเสี่ยงบริษัทหมดไป ควรดูข่าวและงบก่อนเปลี่ยนแผน'
+        elif any(r.startswith('price_drop') for r in rules) or rules & {"rsi_low", "below_target", "sma_cross_down"}:
             option = ("พิจารณาศึกษาจังหวะทยอยสะสมได้เมื่อพื้นฐานยังสอดคล้องกับเหตุผลที่ถือ "
                       "และมีงบ/น้ำหนักพอร์ตรองรับ; หากเหตุผลการถือเปลี่ยนควรทบทวนก่อนเพิ่มเงิน")
         else:
@@ -74,7 +79,8 @@ class TemplateAnalyst(Analyst):
 from app.investment_notes import CONTEXT_GUIDANCE
 INSTRUCTIONS = STYLE + CONTEXT_GUIDANCE + ('\nใช้เหตุการณ์และตัวเลขที่คำนวณไว้แล้ว ไม่คำนวณซ้ำ ถ้าไม่มีข่าวแนบ อย่าเดาสาเหตุราคา '
     'affected_portfolios คือพอร์ตแยกกัน ห้ามรวมจำนวนหุ้นหรืองบ DCA ข้ามพอร์ต '
-    'ใช้ decision_context เชื่อมผลต่อพอร์ต เหตุผลถือ ข่าว และงบรายปีที่มี พร้อมชื่อแหล่งและวันที่ '
+    'ใช้ decision_context เชื่อมผลต่อพอร์ต เหตุผลถือ ข่าว และงบที่มี พร้อมชื่อแหล่งและวันที่ '
+    'แยก metrics งบรายปีกับ latest_quarter งบไตรมาสเดียว ใช้ thesis_checks เป็นประเด็นทบทวน ไม่ใช่คำตัดสินเหตุผลถือ '
     'RSS อาจมีแค่หัวข่าว ห้ามเดาสาเหตุการขึ้นลง งบรายปีไม่ใช่มูลค่าเหมาะสมปัจจุบัน '
     'ราคาและน้ำหนักอาจต่างเวลากัน ห้ามเสนอวงเงินลงทุนเพิ่มเมื่อไม่ได้ยืนยันงบ แนะนำเงื่อนไขเพิ่ม รอ หรือทบทวนได้')
 

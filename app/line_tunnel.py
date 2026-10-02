@@ -25,9 +25,13 @@ def alive(endpoint):
         return False
 
 
-def maintain(settings, stop):
+def maintain(settings, stop, pulse=None):
+    def mark(state, detail):
+        if pulse:
+            pulse.mark('ช่องทาง HTTPS ของ LINE', state, detail)
     executable = ROOT/'data/tools/cloudflared.exe'
     if os.name != 'nt' or not executable.is_file():
+        mark('waiting', 'ใช้ endpoint ที่ตั้งไว้ · ยังไม่ตรวจการรับส่งผ่านอินเทอร์เน็ต')
         return  # Ubuntu uses its separately configured permanent HTTPS endpoint.
     child = None
     try:
@@ -43,14 +47,17 @@ def maintain(settings, stop):
                         existing = r.json().get('endpoint', '')
                         # Preserve user-managed permanent endpoints.
                         if existing and not re.fullmatch(r'https://[a-z0-9-]+\.trycloudflare\.com/webhook', existing):
+                            mark('waiting', 'ใช้ endpoint ถาวร · ยังไม่ตรวจการรับส่งผ่านอินเทอร์เน็ต')
                             log.info('Permanent LINE endpoint retained; test tunnel not started')
                             return
                         if existing and alive(existing):
                             endpoint, registered = existing, True
                     if registered and alive(endpoint):
+                        mark('ok', 'tunnel ตอบสนองผ่านอินเทอร์เน็ต')
                         stop.wait(60)
                         continue
                     if child is None or child.poll() is not None:
+                        mark('busy', 'กำลังเปิด tunnel เบื้องหลัง')
                         logfile = ROOT/'logs'/f'tunnel-auto-{time.time_ns()}.log'
                         with logfile.open('w', encoding='utf-8') as output:
                             child = subprocess.Popen([str(executable), 'tunnel', '--no-autoupdate', '--url',
@@ -67,8 +74,10 @@ def maintain(settings, stop):
                         r = requests.put(API, headers=headers, json={'endpoint': endpoint}, timeout=15)
                         r.raise_for_status()
                         registered = True
+                        mark('ok', 'เชื่อม tunnel และตั้ง webhook แล้ว')
                         log.info('LINE temporary tunnel connected and webhook updated')
                 except (requests.RequestException, ValueError, OSError):
+                    mark('error', 'tunnel ไม่พร้อม จะลองใหม่ในหนึ่งนาที')
                     log.warning('LINE tunnel connection unavailable; retrying in one minute')
                 stop.wait(60)
     except AlreadyRunning:

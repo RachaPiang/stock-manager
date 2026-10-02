@@ -24,10 +24,17 @@ def evaluate(snapshot: Snapshot, indicators: Indicators, stock: Stock, settings:
         result.append(Event(f"{snapshot.source}:{stock.symbol}:{rule}:{day}", stock.symbol,
                             rule, day, title, evidence))
     change = indicators.daily_change_pct
+    def price_event(family, base, title):
+        level = min(3, int(abs(change) / base)) if settings.alert_escalation else 1
+        rule = family if level == 1 else family + '_level' + str(level)
+        level_title = ('ถึงเกณฑ์', 'แรงขึ้น', 'รุนแรงมาก')[level - 1]
+        add(rule, title + ' · ' + level_title, change_pct=change,
+            threshold_pct=(-1 if family == 'price_drop' else 1) * base * level,
+            base_threshold_pct=base, severity_level=level)
     if change <= -settings.price_drop_pct:
-        add("price_drop", "ราคาลดลงรายวันถึงเกณฑ์", change_pct=change, threshold_pct=-settings.price_drop_pct)
+        price_event('price_drop', settings.price_drop_pct, 'ราคาลดลงรายวัน')
     if change >= settings.price_rise_pct:
-        add("price_rise", "ราคาเพิ่มขึ้นรายวันถึงเกณฑ์", change_pct=change, threshold_pct=settings.price_rise_pct)
+        price_event('price_rise', settings.price_rise_pct, 'ราคาเพิ่มขึ้นรายวัน')
     if stock.target_price is not None and snapshot.price < stock.target_price:
         add("below_target", "ราคาต่ำกว่าระดับที่คุณกำหนด", price=snapshot.price,
             target_price=stock.target_price, gap_pct=indicators.target_gap_pct)

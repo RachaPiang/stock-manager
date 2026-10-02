@@ -1,6 +1,7 @@
 """Read-only saved evidence for alerts: never fetch from the price-check loop."""
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta
 
 from app.investor_profile import analysis_context
@@ -9,6 +10,9 @@ from app.investor_profile import analysis_context
 def for_model(value):
     """Keep source names/dates; long URLs belong in buttons, not model tokens."""
     if isinstance(value, dict):
+        if 'quarters' in value and 'metrics' in value:
+            from app.company_checks import compact_company
+            value = compact_company(value)
         return {k:for_model(v) for k,v in value.items() if k not in {'source_url','document_url'}}
     if isinstance(value, list):
         return [for_model(v) for v in value]
@@ -20,9 +24,11 @@ def source_buttons(payload):
     context=payload.get('decision_context',{})
     items=list(context.get('news',[])[:3])
     for symbol,company in context.get('annual_fundamentals',{}).items():
-        metric=next((m for m in company.get('metrics',{}).values() if m.get('source_url')),None)
+        quarter = company.get('latest_quarter')
+        metrics = quarter['metrics'] if quarter else company.get('metrics', {})
+        metric=next((m for m in metrics.values() if m.get('source_url')),None)
         if metric:
-            items.append(dict(symbol=symbol,title='งบรายปีสิ้นสุด '+metric['end'],source_name='SEC EDGAR',
+            items.append(dict(symbol=symbol,title=('งบไตรมาสสิ้นสุด ' if quarter else 'งบรายปีสิ้นสุด ')+metric['end'],source_name='SEC EDGAR',
                               published_at=metric['filed'],source_url=metric['source_url']))
     return '\n'.join(news_reference(item) for item in items if item.get('source_url'))
 
@@ -33,7 +39,7 @@ def cached_fundamentals(settings, symbols, now):
     if not path.exists():
         return {}
     result = {}
-    with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True) as db:
+    with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro', uri=True)) as db:
         for symbol in symbols:
             row = db.execute('SELECT fetched,payload,error FROM facts WHERE symbol=?', (symbol,)).fetchone()
             if not row or not row[1]:
@@ -62,6 +68,13 @@ def context(settings, report, symbols, now):
                 news.append({k: item.get(k) for k in ('symbol','title','excerpt','published_at','source_name','source_url')})
         except (ValueError, TypeError):
             continue
+    fundamentals = cached_fundamentals(settings, symbols, now)
+    from app.company_checks import checks
+    stock_notes = {s['symbol']: s.get('investment_notes', {}) for s in report.get('stocks', [])}
+    pnotes = portfolio.get('investment_notes', report.get('portfolio_info', {}).get('investment_notes', {}))
+    thesis_checks = {symbol: checks(company, {**stock_notes.get(symbol, {}),
+        'focus': stock_notes.get(symbol, {}).get('focus') or pnotes.get('focus', [])}, now)
+        for symbol, company in fundamentals.items()}
     return dict(investor_profile=analysis_context(portfolio), dca=portfolio.get('dca'), policy=portfolio.get('policy'),
         investment_notes=portfolio.get('investment_notes', report.get('portfolio_info', {}).get('investment_notes', {})),
         monitored_stock_notes=[dict(symbol=s['symbol'], investment_notes=s['investment_notes'])
@@ -69,5 +82,5 @@ def context(settings, report, symbols, now):
             (s['symbol'] in symbols or 'MARKET' in symbols) and s['symbol'] not in {h['symbol'] for h in holdings}],
         portfolio_value_usd=live.get('total_usd'), portfolio_prices_complete=live.get('complete',False),
         portfolio_prices_stale=live.get('stale',True), portfolio_allocations=live.get('allocations'), holdings=holdings, news=news[:6],
-        annual_fundamentals=cached_fundamentals(settings,symbols,now),
-        limitations='Saved quotes may have mixed timestamps. News may be headlines only: do not infer causation. Annual SEC facts are not latest-quarter valuations. No new money budget confirmed.')
+        annual_fundamentals=fundamentals, thesis_checks=thesis_checks,
+        limitations='Saved quotes may have mixed timestamps. News may be headlines only: do not infer causation. Annual and discrete-quarter SEC facts are labelled separately; missing quarter cash flows may be YTD-only. Financial observations do not confirm or reject an owner thesis by themselves. No new money budget confirmed.')

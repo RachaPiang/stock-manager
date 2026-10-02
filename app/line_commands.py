@@ -96,7 +96,7 @@ def _portfolio_command(settings, store, event_id, text, now, catalog):
             return ('ติดตามพร้อมกัน: '+' / '.join(p['name'] for p in catalog.read()['portfolios'])
                     +'\nกำลังรอรอบตรวจข่าวและเอกสารใหม่ครั้งแรกครับ')
         status=json.loads(raw)
-        labels={'news':'ข่าวตลาดและหุ้น','filings':'เอกสาร SEC ใหม่','fundamentals':'งบรายปี'}
+        labels={'news':'ข่าวตลาดและหุ้น','filings':'เอกสาร SEC ใหม่','fundamentals':'งบรายปี / ไตรมาส'}
         lines=['สถานะการติดตามครับ','ตรวจล่าสุด '+thai_time(status['at'])]
         entries = catalog.read()['portfolios']
         lines.append('ติดตามพร้อมกัน: '+' / '.join(p['name'] for p in entries))

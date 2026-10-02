@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 
 import requests
-from app.fundamentals import CIKS
+from app.sec_identity import CIKS, resolve
 
 
 def headers():
@@ -29,8 +29,9 @@ def download(url, settings, maximum):
         return bytes(content)
 
 
-def parse(payload,symbol,now):
-    if int(payload.get('cik',-1)) != CIKS[symbol]:
+def parse(payload,symbol,now,expected_cik=None):
+    cik = expected_cik or CIKS.get(symbol)
+    if cik is None or int(payload.get('cik',-1)) != cik:
         raise ValueError('SEC identity mismatch')
     recent=payload.get('filings',{}).get('recent',{})
     output=[]
@@ -46,7 +47,7 @@ def parse(payload,symbol,now):
             doc=recent['primaryDocument'][i]
             if not re.fullmatch(r'\d{10}-\d{2}-\d{6}',accn):
                 continue
-            base=f'https://www.sec.gov/Archives/edgar/data/{CIKS[symbol]}/{accn.replace("-", "")}/'
+            base=f'https://www.sec.gov/Archives/edgar/data/{cik}/{accn.replace("-", "")}/'
             document=base+doc if re.fullmatch(r'[A-Za-z0-9_-]+\.(?:htm|html)',doc) else None
             output.append(dict(source_id='sec:'+accn,symbol=symbol,title=f'{symbol} ยื่นเอกสาร {form} ใหม่',
                 published_at=at.isoformat(),source_name='SEC EDGAR',source_url=base+accn+'-index.html',
@@ -62,7 +63,9 @@ def collect(settings,symbols,now):
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE IF NOT EXISTS feeds(symbol TEXT PRIMARY KEY,at REAL,status TEXT,payload TEXT)')
     for symbol in symbols:
-        if symbol not in CIKS:
+        cik = resolve(settings, symbol, now)
+        if cik is None:
+            result[symbol] = dict(status='identity_unavailable', items=[])
             continue
         with sqlite3.connect(path) as db:
             db.execute('BEGIN IMMEDIATE')
@@ -73,8 +76,8 @@ def collect(settings,symbols,now):
             db.execute('INSERT OR REPLACE INTO feeds VALUES(?,?,?,?)',(symbol,now.timestamp(),'failed','[]'))
         items,status=[],'failed'
         try:
-            raw=download(f'https://data.sec.gov/submissions/CIK{CIKS[symbol]:010d}.json',settings,5_000_000)
-            items=parse(json.loads(raw),symbol,now)
+            raw=download(f'https://data.sec.gov/submissions/CIK{cik:010d}.json',settings,5_000_000)
+            items=parse(json.loads(raw),symbol,now,cik)
             status='ok'
         except (requests.RequestException,ValueError,TypeError):
             pass
